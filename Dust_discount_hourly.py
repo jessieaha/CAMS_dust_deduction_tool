@@ -13,17 +13,21 @@ import cartopy.feature as cfeature
 from matplotlib.colors import LogNorm
 import cdsapi
 ###############USER INPUT####################
-project_dir         = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
-dataset             = 'E1a'
-EEA_folder_path     = f'EEA_PM10/{dataset}'
-cams_dust_threshold = 5 # ug/m3
-COMPUTE_CAMS_DAILY  = False
-DOWNLOAD_EEA        = False
-EEA_temporal_flag   = 'hour' # hour or day 
-DOWNLOAD_CAMS       = False
-Countries           = []
+project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
+dataset              = 'E1a'
+EEA_folder_path      = f'EEA_PM10/{dataset}'
+DOWNLOAD_EEA         = False
+EEA_temporal_flag    = 'hour'    # hour or day 
+DOWNLOAD_CAMS        = False
+COMPUTE_CAMS_DAILY   = False
+Countries            = []        # select countries
+YEAR                 = 2024      # int: target year 
+cams_dust_threshold  = 5         # unit: ug/m3
+PM10_daily_threshold = 50  # 50 µg m-3
+##############################################
+#############Download EEA#####################
+##############################################
 
-#################download####################
 if (DOWNLOAD_EEA):
     from datetime import datetime 
     # Specify download path
@@ -39,7 +43,7 @@ if (DOWNLOAD_EEA):
         "cities": [],
         "pollutants": ["PM10"],
         "dataset": 2,
-        "dateTimeStart": "2023-12-30T00:00:00Z",
+        "dateTimeStart": f"{YEAR-1}-12-30T00:00:00Z",
         "dateTimeEnd": "2024-12-31T23:59:59Z",
         "aggregationType": EEA_temporal_flag,
         "email": ""
@@ -257,7 +261,7 @@ def filter_daily_by_coverage(
 df_processed = filter_daily_by_coverage(hourly_to_daily_eea, reference_year=2024, min_pct=75, keep_coverage_columns= False) 
 
 # Flag exceedance days with concentration above 50 µg m-3
-df_processed['Exceedance'] = df_processed['daily_mean'] > 50
+df_processed['Exceedance'] = df_processed['daily_mean'] > PM10_daily_threshold
 
 print(f'total stations valid after filtering:')
 print(len(df_processed['Samplingpoint'].unique()))
@@ -523,7 +527,7 @@ df_2024['corrected_PM10'] = np.where(dust_exceedance_mask,
                                      df_2024[value_col]).astype('float32')
 import pyarrow as pa
 import pyarrow.parquet as pq
-output_parquet = f'{project_dir}{dataset}_hourly_corrected_dust.parquet'
+output_parquet = f'{project_dir}CAMS_dust_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}.parquet'
 table = pa.Table.from_pandas(df_2024)
 pqwriter = pq.ParquetWriter(output_parquet, table.schema, use_dictionary=True, compression='snappy')
 pqwriter.write_table(table)
