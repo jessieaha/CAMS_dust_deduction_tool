@@ -8,4 +8,5 @@ Here, the dust tool prototype using example of 2024 intend to support the member
 You can either download from the webpage https://eeadmz1-downloads-webapp.azurewebsites.net/ or use API request in the script and load the data. 
 
 For the metadata please download the new one through https://discomap.eea.europa.eu/App/AQViewer/index.html?fqn=Airquality_Dissem.b2g.measurements or use the 2024 one in the folder 
-test
+
+The Jupyternotebook can access util library share for all scrips 
