@@ -130,20 +130,22 @@ def station_plot(
 
     return fig, axs
 
-def until_check() -> str:
+def until_check():
     return "util.py has been imported"
 
-def calculate_data_coverage(df, start=None, end=None, min_pct=75):
+def calculate_data_coverage(df, start=None, end=None, min_pct=75, 
+                            date_col : str = 'Start'
+ ):
     """
     Coverage per station across the chosen period [start, end] (inclusive).
     Automatically handles leap years and partial ranges.
     """
     df = df.copy()
-    df['Start'] = pd.to_datetime(df['Start'])
-    df['date'] = df['Start'].dt.normalize()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df['tmpdate'] = df[date_col].dt.normalize()
 
-    period_start = pd.to_datetime(start) if start is not None else df['date'].min()
-    period_end   = pd.to_datetime(end)   if end   is not None else df['date'].max()
+    period_start = pd.to_datetime(start) if start is not None else df['tmpdate'].min()
+    period_end   = pd.to_datetime(end)   if end   is not None else df['tmpdate'].max()
     period_end   = period_end.normalize()
 
     # Expected days: inclusive date range count
@@ -151,8 +153,8 @@ def calculate_data_coverage(df, start=None, end=None, min_pct=75):
 
     # Observed unique days per station within window
     observed = (
-        df[(df['date'] >= period_start) & (df['date'] <= period_end)]
-          .groupby('Samplingpoint')['date']
+        df[(df['tmpdate'] >= period_start) & (df['tmpdate'] <= period_end)]
+          .groupby('Samplingpoint')['tmpdate']
           .nunique()
           .rename('unique_days')
           .to_frame()
@@ -164,4 +166,38 @@ def calculate_data_coverage(df, start=None, end=None, min_pct=75):
 
     return observed
 
+def compute_median_for_station(station_df: pd.DataFrame,
+                               flag_col : str = 'dust_flag',
+                               obs_col  : str = 'observed_PM10',
+                               date_col : str = 'Start',
+                               Exceedance_col : str='Exceedance'
+                               ):
+    # Sort by date
+    station_df = station_df.sort_values('Start')
 
+    # Separate nondust days
+    nondust = station_df[station_df[flag_col] == False][[date_col,obs_col]].copy()
+    nd_dates = nondust[date_col].to_numpy()
+    nd_vals = nondust[obs_col].to_numpy(dtype=float)
+
+    # Prepare result
+    result = pd.Series(index=station_df.index, dtype=float)
+
+    # Identify dust days with Exceedance
+    dust_days = station_df[(station_df[flag_col]) & (station_df[Exceedance_col])]
+
+    if nondust.empty or dust_days.empty:
+        return result
+
+    # Vectorized search for positions
+    positions = np.searchsorted(nd_dates, dust_days[date_col].to_numpy())
+
+    for i, idx in enumerate(dust_days.index):
+        pos = positions[i]
+        before_slice = nd_vals[max(0, pos-15):pos]
+        after_slice = nd_vals[pos:pos+15]
+        window = np.concatenate([before_slice, after_slice])
+        if window.size > 0:
+            result[idx] = np.median(window)
+
+    return result
