@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-def station_plot(
+def plot_station_timeseries(
     station_name: str,
     obs_df: pd.DataFrame,
     station_column: str = 'Samplingpoint',
@@ -122,8 +122,6 @@ def station_plot(
 
     return fig, axs
 
-def until_check():
-    return "util.py has been imported"
 
 def calculate_data_coverage(df, 
                             start : str,
@@ -511,3 +509,6 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
     # Display
     # -----------------------------
     return VBox([desc, m, plot_out])
+
+def until_check():
+    return "util.py has been imported"
