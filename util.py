@@ -133,7 +133,10 @@ def station_plot(
 def until_check():
     return "util.py has been imported"
 
-def calculate_data_coverage(df, start=None, end=None, min_pct=75, 
+def calculate_data_coverage(df, 
+                            start : str,
+                            end : str,
+                            min_pct: int =75, 
                             date_col : str = 'Start'
  ):
     """
