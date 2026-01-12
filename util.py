@@ -125,7 +125,6 @@ def plot_station_timeseries(
     axs[1].set_xlim(t_min, t_max)
 
     plt.tight_layout()
-    plt.show()
     return fig, axs
 
 
@@ -390,7 +389,7 @@ def plot_interactive_station_map(
         )
 
     fig.show()
-    return fig, axs  
+    return fig  
 
 
 
