@@ -390,7 +390,7 @@ def plot_interactive_station_map(
             legend_title_text=f'Size: {size_column}'
         )
 
-    fig.show()
+    # fig.show()
     return fig  
 
 
