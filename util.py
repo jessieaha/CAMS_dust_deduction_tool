@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 def station_plot(
     station_name: str,
     obs_df: pd.DataFrame,
-    stations_df: pd.DataFrame,
+    # stations_df: pd.DataFrame,
     # Column names in obs_df
     station_column: str = 'Samplingpoint',
     time_column: str = 'Start',
@@ -31,11 +31,9 @@ def station_plot(
     Parameters
     ----------
     station_name : str
-        Station identifier to select in `obs_df` and `stations_df`.
+        Station identifier to select in `obs_df` 
     obs_df : pd.DataFrame
         Observations dataframe containing time series and flags.
-    stations_df : pd.DataFrame
-        Stations metadata with altitude (optional).
     station_column, time_column : str
         Column names in `obs_df` for station ID and time.
     observed_pm10_col, corrected_pm10_col : str
@@ -76,8 +74,8 @@ def station_plot(
 
     # --- Get altitude from stations_df (optional) ---
     altitude = None
-    if not stations_df.empty and stations_id_col in stations_df.columns:
-        alt_row = stations_df.loc[stations_df[stations_id_col] == station_name, altitude_col]
+    if not obs_df.empty and stations_id_col in obs_df.columns:
+        alt_row = obs_df.loc[obs_df[stations_id_col] == station_name, altitude_col]
         if not alt_row.empty and pd.notna(alt_row.iloc[0]):
             altitude = float(alt_row.iloc[0])
 
@@ -120,7 +118,7 @@ def station_plot(
     )
     axs[1].axhline(y=cams_dust_threshold, color='green', linestyle=':', alpha=0.6, label=f'Dust threshold ({cams_dust_threshold} µg/m³)')
     axs[1].set_xlabel('Date', fontsize=label_fontsize)
-    axs[1].set_ylabel('CAMS Dust (µg/m³)', fontsize=label_fontsize, color='green')
+    axs[1].set_ylabel('CAMS Surface Dust (µg/m³)', fontsize=label_fontsize, color='green')
     axs[1].tick_params(axis='y', labelcolor='green')
     axs[1].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
 
@@ -134,3 +132,36 @@ def station_plot(
 
 def until_check() -> str:
     return "util.py has been imported"
+
+def calculate_data_coverage(df, start=None, end=None, min_pct=75):
+    """
+    Coverage per station across the chosen period [start, end] (inclusive).
+    Automatically handles leap years and partial ranges.
+    """
+    df = df.copy()
+    df['Start'] = pd.to_datetime(df['Start'])
+    df['date'] = df['Start'].dt.normalize()
+
+    period_start = pd.to_datetime(start) if start is not None else df['date'].min()
+    period_end   = pd.to_datetime(end)   if end   is not None else df['date'].max()
+    period_end   = period_end.normalize()
+
+    # Expected days: inclusive date range count
+    expected_days_total = pd.date_range(period_start, period_end, freq='D').size
+
+    # Observed unique days per station within window
+    observed = (
+        df[(df['date'] >= period_start) & (df['date'] <= period_end)]
+          .groupby('Samplingpoint')['date']
+          .nunique()
+          .rename('unique_days')
+          .to_frame()
+    )
+
+    observed['expected_days'] = expected_days_total
+    observed['coverage_percentage'] = (observed['unique_days'] / observed['expected_days']) * 100.0
+    observed['sufficient_coverage'] = observed['coverage_percentage'] >= float(min_pct)
+
+    return observed
+
+
