@@ -120,7 +120,6 @@ def plot_station_timeseries(
     plt.tight_layout()
     plt.show()
 
-    return fig, axs
 
 
 def calculate_data_coverage(df, 
@@ -462,7 +461,7 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
     desc = HTML("<b>Click a station marker</b> to load its PM10 time series below.")
 
     # -----------------------------
-    # Add markers (click → station_plot)
+    # Add markers (click → plot_station_timeseries)
     # -----------------------------
     for _, row in summary.iterrows():
         sp  = row[station_col]
@@ -489,7 +488,7 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
                 with plot_out:
                     plot_out.clear_output(wait=True)
                     try:
-                        fig_ts, axs = station_plot(
+                        fig_ts, axs = plot_station_timeseries(
                             station_name=station_name,
                             obs_df=df,                      # obs_df (fixed year view)
                             year=year,                      # fixed
