@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.colors as mcolors
+import ipywidgets  
+from IPython.display import display
 from ipywidgets import Output, HTML, VBox
 from ipyleaflet import Map, CircleMarker, LayersControl, basemaps
 import matplotlib.cm as cm
