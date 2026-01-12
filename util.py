@@ -126,6 +126,7 @@ def plot_station_timeseries(
 
     plt.tight_layout()
     plt.show()
+    return fig, axs
 
 
 
