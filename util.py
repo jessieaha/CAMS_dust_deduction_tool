@@ -1,6 +1,13 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import matplotlib.colors as mcolors
+from ipywidgets import Output, HTML, VBox
+from ipyleaflet import Map, CircleMarker, LayersControl, basemaps
+import matplotlib.cm as cm
+import plotly.express as px
 
 def plot_station_timeseries(
     station_name: str,
@@ -195,6 +202,7 @@ def compute_median_for_station(station_df: pd.DataFrame,
     return result
 
 def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, cmap_name='gist_heat_r', n_colors=10, extent=None):
+   
     """
     Plots maps of exceedance data with discrete color levels.
 
@@ -269,8 +277,6 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
 
     # plt.tight_layout() 
     plt.show()
-
-import plotly.express as px
 
 def plot_interactive_station_map(
     df,
@@ -383,14 +389,12 @@ def plot_interactive_station_map(
         )
 
     fig.show()
+    return fig, axs  
 
 
-from ipywidgets import Output, HTML, VBox
-from ipyleaflet import Map, CircleMarker, LayersControl, basemaps
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
 
 def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_threshold):
+    
     # -----------------------------
     # Config / Inputs
     # -----------------------------
