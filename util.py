@@ -224,7 +224,7 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
     bounds = np.linspace(0, vmax, n_colors + 1)
     norm = mcolors.BoundaryNorm(bounds, cmap.N)
 
-    fig, axs = plt.subplots(1, len(columns_to_plot), figsize=(5 * len(columns_to_plot), 5),
+    fig, axs = plt.subplots(1, len(columns_to_plot), figsize=(5 * len(columns_to_plot), 6),
                             subplot_kw={'projection': ccrs.PlateCarree()})
 
     # Ensure axs is iterable even for a single subplot
@@ -263,10 +263,35 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
         else:
             ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-        # Add gridlines
-        gl = ax.gridlines(draw_labels=False, dms=False, x_inline=False, y_inline=False)
-        gl.bottom_labels = True
-        gl.left_labels = True
+        # --- Gridlines & labels ---
+        if i == 0:
+            # First subplot: show left labels; hide grid "lines"
+            gl = ax.gridlines(
+                draw_labels=True, dms=False, x_inline=False, y_inline=False
+            )
+            gl.top_labels = False
+            gl.right_labels = False
+            gl.bottom_labels = True
+            gl.left_labels = True
+
+            # Hide the actual grid lines (keep only labels)
+            # These attributes are supported in newer Cartopy versions.
+            # If not available in your env, you can also do: gl.alpha = 0
+            gl.xlines = False
+            gl.ylines = False
+
+            # Optional: tweak label style
+            # gl.xlabel_style = {'size': 9}
+            gl.ylabel_style = {'size': 9}
+        else:
+            # Other subplots: no labels, no lines
+            gl = ax.gridlines(
+                draw_labels=False, dms=False, x_inline=False, y_inline=False
+            )
+            gl.bottom_labels = True
+            gl.xlines = False
+            gl.ylines = False
+
 
         # Set individual subplot titles
         ax.set_title(titles[i], fontsize=12)
