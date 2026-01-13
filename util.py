@@ -281,7 +281,7 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
             gl.ylines = False
 
             # Optional: tweak label style
-            # gl.xlabel_style = {'size': 9}
+            gl.xlabel_style = {'size': 9}
             gl.ylabel_style = {'size': 9}
         else:
             # Other subplots: no labels, no lines
@@ -291,7 +291,7 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
             gl.bottom_labels = True
             gl.xlines = False
             gl.ylines = False
-
+            gl.xlabel_style = {'size': 9}
 
         # Set individual subplot titles
         ax.set_title(titles[i], fontsize=12)
