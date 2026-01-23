@@ -7,9 +7,12 @@ import matplotlib.colors as mcolors
 import ipywidgets  
 from IPython.display import display
 from ipywidgets import Output, HTML, VBox
-from ipyleaflet import Map, CircleMarker, LayersControl, basemaps
+from ipyleaflet import Map, CircleMarker, LayersControl, basemaps, LayersControl, LegendControl
+from ipywidgets import VBox, HTML, Output
+import matplotlib.pyplot as plt  # used by plot_station_timeseries if it shows figures
 import matplotlib.cm as cm
-import plotly.express as px
+import plotly.express as px 
+import plotly.graph_objects as go
 
 def plot_station_timeseries(
     station_name: str,
@@ -305,48 +308,50 @@ def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, c
     # plt.tight_layout() 
     plt.show()
 
+
 def plot_interactive_station_map(
     df,
     color_column,
     size_column=None,
-    color_type='auto',  # 'auto', 'continuous_scale', 'discrete_sequence'
+    color_type='auto',             # 'auto', 'continuous_scale', 'discrete_sequence'
     colorscale='Viridis',
     zoom=5,
     center_lat=None,
     center_lon=None,
     map_title=None,
     map_subtitle=None,
-    colorbar_title='', # Default to empty string to remove title
-    marker_size_range=[8, 20],
-    n_discrete_colors=10 # Number of bins/colors if discrete and color_column is continuous
+    colorbar_title=' ',            # Default to single space to show no title if unwanted
+    marker_size_range=[8, 20],     # [min_px, max_px] — note: px.scatter_mapbox only uses size_max directly
+    n_discrete_colors=10,
+    # NEW: user-controlled size legend values (your smin/smax)
+    size_legend_min=None,
+    size_legend_max=None, 
+    size_legend_steps=4
 ):
     """
     Plots an interactive scatter mapbox of stations using Plotly Express.
 
     Args:
-        df (pd.DataFrame): The DataFrame containing the station data.
-        color_column (str): The name of the column to use for coloring the markers.
-        size_column (str, optional): The name of the column to use for sizing the markers.
-        color_type (str): How to interpret the color. 
-                          'auto' (default: px decides based on data type),
-                          'continuous_scale', 'discrete_sequence'.
-                          If 'discrete_sequence' and color_column is continuous, data will be binned.
-        colorscale (str or list/dict): The Plotly color scale name (for continuous) 
-                                       or a list/dict (for discrete sequence) to use.
-        zoom (int): The initial zoom level for the map.
-        center_lat (float, optional): The latitude for the map's center.
-        center_lon (float, optional): The longitude for the map's center.
-        map_title (str, optional): The main title for the map.
-        map_subtitle (str, optional): A subtitle for the map.
-        colorbar_title (str): The title for the color bar. Defaults to '' (empty string).
-        marker_size_range (list): [min_size, max_size] for marker sizing.
-        n_discrete_colors (int): Number of bins/colors to use if `color_type` is 'discrete_sequence' 
-                                 and `color_column` is continuous.
+        df (pd.DataFrame): DataFrame containing station data.
+        color_column (str): Column for coloring.
+        size_column (str, optional): Column for sizing bubbles.
+        color_type (str): 'auto' | 'continuous_scale' | 'discrete_sequence'.
+        colorscale (str or list/dict): Colors for color dim.
+        zoom (int): Map zoom.
+        center_lat (float, optional), center_lon (float, optional): Map center.
+        map_title (str, optional), map_subtitle (str, optional).
+        colorbar_title (str): Title for colorbar (continuous color).
+        marker_size_range (list[int,int]): [min_px, max_px] desired display sizes. Only max is used by px directly.
+        n_discrete_colors (int): #bins if discrete sequence on numeric col.
+        size_legend_min (float, optional): Minimum data value to display in size legend.
+        size_legend_max (float, optional): Maximum data value to display in size legend.
+        size_legend_steps (int): Number of size bubbles to show in legend.
     """
 
-    center_dict = {'lat': center_lat, 'lon': center_lon} if center_lat is not None and center_lon is not None else None
-    
-    plotting_df = df.copy() # Work on a copy to avoid modifying original df
+    # Center dict may be None; we'll also provide a safe fallback for legend-only traces later
+    center_dict = {'lat': center_lat, 'lon': center_lon} if (center_lat is not None and center_lon is not None) else None
+
+    plotting_df = df.copy()
     color_col_to_plot = color_column
 
     plot_kwargs = {
@@ -357,47 +362,66 @@ def plot_interactive_station_map(
         'center': center_dict,
         'hover_name': 'Samplingpoint',
         'mapbox_style': 'open-street-map',
-        'size_max': marker_size_range[1]
+        'size_max': marker_size_range[1],  # px uses only size_max to set the top bubble size
     }
 
-    if color_type == 'continuous_scale' or \
-       (color_type == 'auto' and pd.api.types.is_numeric_dtype(plotting_df[color_column])):
-        plot_kwargs['color_continuous_scale'] = colorscale
-        plot_kwargs['color'] = color_col_to_plot
-        # color_continuous_colorbar is not a direct argument for px.scatter_mapbox.
-        # It's usually part of the color_continuous_scale dict or set via update_layout/update_coloraxes.
-        # For simplicity, if colorbar_title is desired, we'll set it after fig creation.
+    # --- Color handling ---
+    is_color_numeric = pd.api.types.is_numeric_dtype(plotting_df[color_column])
 
-    elif color_type == 'discrete_sequence' or \
-         (color_type == 'auto' and not pd.api.types.is_numeric_dtype(plotting_df[color_column])):
-        # If continuous column needs discrete colors, bin it
-        if pd.api.types.is_numeric_dtype(plotting_df[color_column]):
+    if color_type == 'continuous_scale' or (color_type == 'auto' and is_color_numeric):
+        plot_kwargs['color'] = color_col_to_plot
+        plot_kwargs['color_continuous_scale'] = colorscale
+
+    elif color_type == 'discrete_sequence' or (color_type == 'auto' and not is_color_numeric):
+        # If user forced discrete sequence on a numeric column, bin it:
+        if is_color_numeric:
             color_col_to_plot = color_column + '_binned'
             plotting_df[color_col_to_plot] = pd.cut(
                 plotting_df[color_column],
                 bins=n_discrete_colors,
-                labels=[f'{i}-{i+1}' for i in range(n_discrete_colors)], # Generic labels
+                labels=[f'{i}-{i+1}' for i in range(n_discrete_colors)],
                 include_lowest=True
             )
         plot_kwargs['color'] = color_col_to_plot
-        plot_kwargs['color_discrete_sequence'] = colorscale if isinstance(colorscale, list) else px.colors.qualitative.Plotly # Fallback
-        # For discrete colors, legend title is often derived from column name, no direct colorbar title option in px.
+        plot_kwargs['color_discrete_sequence'] = colorscale if isinstance(colorscale, list) else px.colors.qualitative.Plotly
 
+    # --- Create figure ---
     fig = px.scatter_mapbox(plotting_df, **plot_kwargs)
 
-    # Explicitly set colorbar title AFTER figure creation if color_continuous_scale was used
-    if colorbar_title and (color_type == 'continuous_scale' or \
-        (color_type == 'auto' and pd.api.types.is_numeric_dtype(plotting_df[color_column]))):
-        fig.update_layout(coloraxis_colorbar_title_text=colorbar_title)
+    # --- Continuous color: set colorbar title + tick format ---
+    if colorbar_title and (color_type == 'continuous_scale' or (color_type == 'auto' and is_color_numeric)):
+        fig.update_coloraxes(colorbar=dict(title=colorbar_title, tickformat=".2f"))
 
+    # --- Hover formatting for size and numeric color ---
+    custom_cols, custom_idx = [], {}
+    pos = 0
+    if size_column is not None:
+        custom_cols.append(size_column); custom_idx['size'] = pos; pos += 1
+    if color_column and is_color_numeric:
+        custom_cols.append(color_column); custom_idx['color'] = pos; pos += 1
 
-    # Update layout for title and subtitle
+    if custom_cols:
+        fig.update_traces(
+            customdata=plotting_df[custom_cols].to_numpy(),
+            selector=dict(type="scattermapbox")
+        )
+        hover_lines = ["<b>%{hovertext}</b>"]
+        if 'size' in custom_idx:
+            hover_lines.append(f"{size_column}: %{{customdata[{custom_idx['size']}]:.0f}}")
+        if 'color' in custom_idx:
+            hover_lines.append(f"{color_column}: %{{customdata[{custom_idx['color']}]:.2f}}")
+        hover_lines.append("<extra></extra>")
+        fig.update_traces(
+            hovertemplate="<br>".join(hover_lines),
+            selector=dict(type="scattermapbox")
+        )
+
+    # --- Title & subtitle ---
     fig.update_layout(
         title_text=map_title,
         title_x=0.5,
         title_y=0.95,
     )
-
     if map_subtitle:
         fig.add_annotation(
             text=map_subtitle,
@@ -407,35 +431,138 @@ def plot_interactive_station_map(
             font=dict(size=12, color="gray"),
             xanchor="center", yanchor="top"
         )
-    
-    # Explicitly configure size legend if size_column is present
-    if size_column:
-        # Ensure the size legend title is clear. px usually does this, but explicit can help.
+
+    # ===============================
+    # Size legend (legend-only traces)
+    # ===============================
+    if size_column is not None:
+        # 1) Determine representative data values to show in legend
+        data_min = float(np.nanmin(plotting_df[size_column]))
+        data_max = float(np.nanmax(plotting_df[size_column]))
+
+        smin = data_min if size_legend_min is None else float(size_legend_min)
+        smax = data_max if size_legend_max is None else float(size_legend_max)
+        if smax < smin:
+            smin, smax = smax, smin  # swap if user accidentally inverted
+
+        # Choose values to display
+        size_values = [smin] if np.isclose(smin, smax) else list(np.linspace(smin, smax, max(2, size_legend_steps)))
+
+        # 2) Reuse PX-computed sizing parameters so legend matches map
+        main_trace = next((t for t in fig.data if t.type == "scattermapbox"), None)
+        if main_trace and hasattr(main_trace, "marker") and hasattr(main_trace.marker, "sizeref"):
+            computed_sizeref = main_trace.marker.sizeref
+            sizemode = getattr(main_trace.marker, "sizemode", "diameter")
+            sizemin = getattr(main_trace.marker, "sizemin", None)
+        else:
+            # Fallback if not found (rare)
+            computed_sizeref = None
+            sizemode = "diameter"
+            sizemin = None
+
+        # 3) Safe coordinates for legend-only traces
+        if center_dict is not None:
+            lat0, lon0 = center_dict["lat"], center_dict["lon"]
+        else:
+            # Fallback to first row coords (required even if legendonly)
+            lat0 = float(plotting_df['Latitude'].iloc[0])
+            lon0 = float(plotting_df['Longitude'].iloc[0])
+
+        # 4) Add one trace per size value (legend-only)
+        for v in size_values:
+            fig.add_trace(go.Scattermapbox(
+                lat=[lat0], lon=[lon0],
+                mode="markers",
+                marker=dict(
+                    size=v,                        # IMPORTANT: pass the DATA value, not pixels
+                    sizemode=sizemode,
+                    sizeref=computed_sizeref,     # reuse mapping from main trace
+                    sizemin=sizemin,
+                    color="blue"
+                ),
+                name=f"{v:.2f}",
+                legendgroup="size-legend",
+                showlegend=True,
+                visible="legendonly",
+                hoverinfo="skip"
+            ))
+
+        # 5) Make legend respect per-trace marker sizes
         fig.update_layout(
-            legend_title_text=f'Size: {size_column}'
+            legend=dict(
+                title=f"{size_column}",
+                itemsizing="trace",            # <-- KEY so the legend icon size matches the trace
+                yanchor="bottom",
+                y=0.01,
+                xanchor="left",
+                x=0.01,
+                bgcolor="rgba(255,255,255,0.6)"
+            )
         )
 
-    # fig.show()
-    return fig  
+        # Optional: ensure the size legend entries appear after color categories
+        fig.update_traces(legendrank=100, selector=dict(legendgroup="size-legend"))
+      
 
+    return fig
 
+def map_timeseries_clickable_plot(
+    obs_df,
+    year,
+    exceedance_threshold,
+    cams_dust_threshold,
+    # --- NEW: column parameters (no more fixed names) ---
+    station_col='Samplingpoint',
+    time_col='Start',
+    lat_col='Latitude',
+    lon_col='Longitude',
+    value_col='observed_PM10',
+    # --- Color & size controls ---
+    cmap_name='plasma',           # any Matplotlib colormap name
+    radius_range=(6, 16),         # (min_px, max_px)
+    # --- Legend controls ---
+    legend_title=None,            # defaults to f"Average {value_col}"
+    legend_bins=5,                # number of bins (discrete steps to represent the continuous colormap)
+    legend_round=1,               # decimals in legend labels
+    legend_position='bottomright' # any Leaflet corner: 'topleft', 'topright', 'bottomleft', 'bottomright'
+):
+    """
+    Build an ipyleaflet map with station markers colored & sized by the per-station
+    average of `value_col`. Clicking a marker renders that station's time series.
 
-def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_threshold):
-    
-    # -----------------------------
-    # Config / Inputs
-    # -----------------------------
-    station_col = 'Samplingpoint'
-    time_col    = 'Start'
-    lat_col     = 'Latitude'
-    lon_col     = 'Longitude'
-    observed_pm10_col = 'observed_PM10'
+    Parameters
+    ----------
+    obs_df : pd.DataFrame
+        Observation dataframe containing at least the columns specified by
+        station_col, time_col, lat_col, lon_col, value_col.
+    year : int
+        Year passed to plot_station_timeseries (no filtering here).
+    exceedance_threshold : float
+        Passed to plot_station_timeseries.
+    cams_dust_threshold : float
+        Passed to plot_station_timeseries.
+    station_col, time_col, lat_col, lon_col, value_col : str
+        Column names to use for station ID, timestamp, latitude, longitude, and measured value.
+    cmap_name : str
+        Matplotlib colormap name for coloring markers.
+    radius_range : (int, int)
+        Pixel radius range for marker sizes (min, max).
+    legend_title : str or None
+        Title for the legend. If None, uses f"Average {value_col}".
+    legend_bins : int
+        Number of discrete color bins used to represent the continuous colormap.
+    legend_round : int
+        Number of decimals to format legend bin labels.
+    legend_position : str
+        Position of the legend on the map.
+    """
 
-    # Use obs_df (fixed year view)
     df = obs_df.copy()
-    df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+    # Parse time column if present
+    if time_col in df.columns:
+        df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
 
-    # Single coordinate per station (first non-null)
+    # Coordinates per station (first non-null)
     coords = (
         df[[station_col, lat_col, lon_col]]
         .dropna(subset=[lat_col, lon_col])
@@ -443,23 +570,23 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
         .set_index(station_col)
     )
 
-    # Per-station average PM10 (for marker color/size)
-    avg_pm10 = (
-        df.groupby(station_col)[observed_pm10_col]
+    # Per-station average of the value_col (for marker color & size)
+    avg_col_name = f"avg_{value_col}"
+    avg_vals = (
+        df.groupby(station_col)[value_col]
           .mean()
-          .rename('avg_pm10')
+          .rename(avg_col_name)
           .to_frame()
     )
 
     summary = (
-        avg_pm10.join(coords, how='inner')
+        avg_vals.join(coords, how='inner')
                 .dropna(subset=[lat_col, lon_col])
                 .reset_index()
     )
 
     if summary.empty:
-        # Instead of raising an error, return a VBox with an error message
-        return VBox([HTML("<b>Error: No stations with coordinates and PM10 in obs_df. Check Latitude/Longitude availability.</b>")])
+        return VBox([HTML("<b>Error: No stations with coordinates and values.</b>")])
 
     # -----------------------------
     # Helpers for color/size scaling
@@ -472,9 +599,9 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
     def radius_for_value(val, vmin, vmax, rmin=6, rmax=16):
         return float(np.interp(val, [vmin, vmax], [rmin, rmax]))
 
-    # Scale bounds
-    vmin = float(summary['avg_pm10'].min())
-    vmax = float(summary['avg_pm10'].max())
+    # Scale bounds (across stations' averages)
+    vmin = float(summary[avg_col_name].min())
+    vmax = float(summary[avg_col_name].max())
 
     # -----------------------------
     # Build the map (centered over median coords)
@@ -482,26 +609,42 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
     center_lat = float(summary[lat_col].median())
     center_lon = float(summary[lon_col].median())
 
-    m = Map(center=(center_lat, center_lon), zoom=6, basemap=basemaps.OpenStreetMap.Mapnik)
+    m = Map(center=(center_lat, center_lon), zoom=6, basemap={'url': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'})
     m.add_control(LayersControl())
 
-    # Output area for the time series
+    # Output area for the time series below the map
     plot_out = Output()
+    desc = HTML("<b>Click a station marker</b> to load its time series below.")
 
-    # Instruction
-    desc = HTML("<b>Click a station marker</b> to load its PM10 time series below.")
+    # -----------------------------
+    # Color legend (discrete bins from the continuous colormap)
+    # -----------------------------
+    legend_title = legend_title or f"Average {value_col}"
+    # Bin edges & labels
+    edges = np.linspace(vmin, vmax, legend_bins + 1)
+    # Use midpoints to sample the colormap
+    mids = (edges[:-1] + edges[1:]) / 2.0
+
+    legend_items = {}
+    for i, mid in enumerate(mids):
+        label = f"{edges[i]:.{legend_round}f}–{edges[i+1]:.{legend_round}f}"
+        legend_items[label] = color_for_value(mid, vmin, vmax, cmap_name=cmap_name)
+
+    legend = LegendControl(legend_items, title=legend_title, position=legend_position)
+    m.add(legend)
 
     # -----------------------------
     # Add markers (click → plot_station_timeseries)
     # -----------------------------
+    rmin, rmax = radius_range
     for _, row in summary.iterrows():
         sp  = row[station_col]
         lat = float(row[lat_col])
         lon = float(row[lon_col])
-        val = float(row['avg_pm10'])
+        val = float(row[avg_col_name])
 
-        color  = color_for_value(val, vmin, vmax, cmap_name='plasma')
-        radius = int(radius_for_value(val, vmin, vmax, rmin=6, rmax=16)) # Cast radius to int
+        color  = color_for_value(val, vmin, vmax, cmap_name=cmap_name)
+        radius = int(radius_for_value(val, vmin, vmax, rmin=rmin, rmax=rmax))
 
         marker = CircleMarker(
             location=(lat, lon),
@@ -512,24 +655,36 @@ def map_timeseries_clickable_plot(obs_df, year, exceedance_threshold, cams_dust_
             stroke=False
         )
 
-        # Use a factory function to capture the correct `sp` for each marker
+        # Use a factory to bind the current station to the click handler
         def create_on_click_callback(current_sp):
             def on_click_callback(**kwargs):
-                station_name = current_sp
                 with plot_out:
                     plot_out.clear_output(wait=True)
                     try:
-                        fig_ts, axs = plot_station_timeseries(
-                            station_name=station_name,
-                            obs_df=df,                      # obs_df (fixed year view)
-                            year=year,                      # fixed
-                            exceedance_threshold=exceedance_threshold,
-                            cams_dust_threshold=cams_dust_threshold,
-                            figsize=(12, 5),
-                        )
+                        # Try to pass value_col if the function supports it
+                        try:
+                            fig_ts, axs = plot_station_timeseries(
+                                station_name=current_sp,
+                                obs_df=df,
+                                year=year,
+                                exceedance_threshold=exceedance_threshold,
+                                cams_dust_threshold=cams_dust_threshold,
+                                value_col=value_col,  # NEW: hand over the chosen column
+                                figsize=(12, 5),
+                            )
+                        except TypeError:
+                            # Fallback if plot_station_timeseries doesn't accept value_col
+                            fig_ts, axs = plot_station_timeseries(
+                                station_name=current_sp,
+                                obs_df=df,
+                                year=year,
+                                exceedance_threshold=exceedance_threshold,
+                                cams_dust_threshold=cams_dust_threshold,
+                                figsize=(12, 5),
+                            )
                         plt.show()
                     except Exception as e:
-                        print(f"Cannot render station '{station_name}': {e}")
+                        print(f"Cannot render station '{current_sp}': {e}")
             return on_click_callback
 
         marker.on_click(create_on_click_callback(sp))
