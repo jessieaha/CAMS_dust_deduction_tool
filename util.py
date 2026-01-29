@@ -9,6 +9,7 @@ from IPython.display import display
 from ipywidgets import Output, HTML, VBox
 from ipyleaflet import Map, CircleMarker, LayersControl, basemaps, LayersControl, LegendControl
 from ipywidgets import VBox, HTML, Output
+from typing import List, Optional, Literal, Sequence, Tuple
 import matplotlib.pyplot as plt  # used by plot_station_timeseries if it shows figures
 import matplotlib.cm as cm
 import plotly.express as px 
@@ -205,109 +206,6 @@ def compute_median_for_station(station_df: pd.DataFrame,
             result[idx] = np.median(window)
 
     return result
-
-def plot_exceedance_maps_discrete(df, columns_to_plot, titles, vmax,cbar_text, cmap_name='gist_heat_r', n_colors=10, extent=None):
-   
-    """
-    Plots maps of exceedance data with discrete color levels.
-
-    Args:
-        df (pd.DataFrame): The DataFrame containing the data with Latitude, Longitude, and columns to plot.
-        columns_to_plot (list): A list of column names from the DataFrame to plot.
-        titles (list): A list of titles for each subplot, corresponding to columns_to_plot.
-        vmax (float): The maximum value for the color scale.
-        cmap_name (str, optional): The name of the colormap. Defaults to 'gist_heat_r'.
-        n_colors (int, optional): The number of discrete color levels. Defaults to 10.
-        extent (list, optional): [min_lon, max_lon, min_lat, max_lat] for map extent. If None, calculated dynamically.
-    """
-    assert len(columns_to_plot) == len(titles), "Number of columns to plot must match number of titles."
-
-    # Create discrete colormap and normalizer
-    cmap = plt.get_cmap(cmap_name, n_colors)
-    bounds = np.linspace(0, vmax, n_colors + 1)
-    norm = mcolors.BoundaryNorm(bounds, cmap.N)
-
-    fig, axs = plt.subplots(1, len(columns_to_plot), figsize=(5 * len(columns_to_plot), 6),
-                            subplot_kw={'projection': ccrs.PlateCarree()})
-
-    # Ensure axs is iterable even for a single subplot
-    if len(columns_to_plot) == 1:
-        axs = [axs]
-
-    # Store the last scatter object to use for the single colorbar
-    last_scatter = None
-
-    for i, col in enumerate(columns_to_plot):
-        ax = axs[i]
-
-        # Scatter plot
-        scatter = ax.scatter(df['Longitude'], df['Latitude'],
-                             c=df[col],
-                             s=15, cmap=cmap, norm=norm,
-                             transform=ccrs.PlateCarree(), alpha=0.8,
-                             edgecolors='black', linewidth=0.5)
-        last_scatter = scatter # Keep track of the last scatter for the colorbar
-
-        # Add map features
-        ax.add_feature(cfeature.COASTLINE, alpha=0.6)
-        ax.add_feature(cfeature.BORDERS, alpha=0.6)
-        ax.add_feature(cfeature.LAND, alpha=0.3)
-        ax.add_feature(cfeature.OCEAN, alpha=0.3)
-        ax.add_feature(cfeature.LAKES, alpha=0.3)
-
-        # Set extent
-        if extent is None:
-            buffer_val = 1.5
-            dynamic_extent = [
-                df['Longitude'].min() - buffer_val, df['Longitude'].max() + buffer_val,
-                df['Latitude'].min() - buffer_val, df['Latitude'].max() + buffer_val
-            ]
-            ax.set_extent(dynamic_extent, crs=ccrs.PlateCarree())
-        else:
-            ax.set_extent(extent, crs=ccrs.PlateCarree())
-
-        # --- Gridlines & labels ---
-        if i == 0:
-            # First subplot: show left labels; hide grid "lines"
-            gl = ax.gridlines(
-                draw_labels=True, dms=False, x_inline=False, y_inline=False
-            )
-            gl.top_labels = False
-            gl.right_labels = False
-            gl.bottom_labels = True
-            gl.left_labels = True
-
-            # Hide the actual grid lines (keep only labels)
-            # These attributes are supported in newer Cartopy versions.
-            # If not available in your env, you can also do: gl.alpha = 0
-            gl.xlines = False
-            gl.ylines = False
-
-            # Optional: tweak label style
-            gl.xlabel_style = {'size': 9}
-            gl.ylabel_style = {'size': 9}
-        else:
-            # Other subplots: no labels, no lines
-            gl = ax.gridlines(
-                draw_labels=False, dms=False, x_inline=False, y_inline=False
-            )
-            gl.bottom_labels = True
-            gl.xlines = False
-            gl.ylines = False
-            gl.xlabel_style = {'size': 9}
-
-        # Set individual subplot titles
-        ax.set_title(titles[i], fontsize=12)
-
-    # Create a single colorbar for the entire figure if there's a scatter plot
-    if last_scatter:
-        cbar = fig.colorbar(last_scatter, ax=axs, orientation='vertical',
-                            shrink=0.8, pad=0.05, extend='max', ticks=bounds) # Changed orientation and pad
-        cbar.set_label(cbar_text, fontsize=11) # Combined label
-
-    # plt.tight_layout() 
-    plt.show()
-
 
 def plot_interactive_station_map(
     df,
@@ -697,3 +595,227 @@ def map_timeseries_clickable_plot(
 
 def until_check():
     return "util.py has been imported"
+
+
+
+def plot_exceedance_maps_discrete(
+    df: pd.DataFrame,
+    columns_to_plot: Sequence[str],
+    titles: Sequence[str],
+    vmax: float,
+    cbar_text: str,
+    cmap_name: str = "gist_heat_r",
+    n_colors: int = 10,
+    extent: Optional[List[float]] = None,
+    gridline : bool = False ,
+    # --- NEW OPTIONS ---
+    cbar_mode: Literal["single", "each"] = "single",
+    cbar_orientation: Literal["vertical", "horizontal"] = "vertical",
+    cbar_tick_mode: Literal["bounds", "centers"] = "bounds",
+    cbar_size: str = "2.0%",     # only used when cbar_mode='each'
+    cbar_pad: str = "1.5%",      # only used when cbar_mode='each'
+    cbar_shrink: float = 0.85,   # used for cbar_mode='single'
+    cbar_pad_single: float = 0.05,
+    marker_size: float = 15,
+    marker_alpha: float = 0.8,
+    edgecolor: str = "black",
+    edge_lw: float = 0.5,
+    coast_alpha: float = 0.6,
+    borders_alpha: float = 0.6,
+    land_alpha: float = 0.3,
+    ocean_alpha: float = 0.3,
+    lakes_alpha: float = 0.3,
+    title_fontsize: int = 12,
+    label_fontsize: int = 9,
+    figsize_per_panel: Tuple[float, float] = (5.0, 6.0),
+    show: bool = True,
+    savefile: Optional[str] = None,
+    dpi: int = 200,
+):
+    """
+    Plot maps of exceedance data with discrete color levels and flexible colorbar options.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Must contain 'Latitude', 'Longitude', and columns in `columns_to_plot`.
+    columns_to_plot : list[str]
+        Column names in df to plot.
+    titles : list[str]
+        Titles for each subplot.
+    vmax : float
+        Upper bound for the discrete color scale (lower bound is 0).
+    cbar_text : str
+        Colorbar label text.
+    cmap_name : str
+        Matplotlib colormap name, e.g., 'gist_heat_r'.
+    n_colors : int
+        Number of discrete levels (creates n_colors+1 boundaries from 0..vmax).
+    extent : [min_lon, max_lon, min_lat, max_lat] or None
+        Map extent. If None, computed dynamically from df with a small buffer.
+
+    Notes
+    -----
+    - `cbar_mode="single"`: one shared colorbar spanning all axes (fig.colorbar).
+    - `cbar_mode="each"`: a separate narrow colorbar per subplot,
+      attached via axes_grid1's `make_axes_locatable`.
+    - `cbar_orientation` applies to both modes ('vertical' or 'horizontal').
+    """
+    assert len(columns_to_plot) == len(titles), "Number of columns must match number of titles."
+
+    # --- Discrete colormap & normalization ---
+    cmap = plt.get_cmap(cmap_name, n_colors)
+    bounds = np.linspace(0, vmax, n_colors + 1)
+    norm = mcolors.BoundaryNorm(bounds, cmap.N)
+
+    # --- Figure & axes ---
+    n_panels = len(columns_to_plot)
+    fig_w = figsize_per_panel[0] * n_panels
+    fig_h = figsize_per_panel[1]
+    fig, axs = plt.subplots(
+        1, n_panels,
+        figsize=(fig_w, fig_h),
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        dpi=dpi
+    )
+
+    # Ensure axs is iterable for 1 panel
+    if n_panels == 1:
+        axs = [axs]
+
+    scatters = []
+
+    # --- Plot each panel ---
+    for i, (col, title) in enumerate(zip(columns_to_plot, titles)):
+        ax = axs[i]
+
+        # Scatter
+        sc = ax.scatter(
+            df["Longitude"], df["Latitude"],
+            c=df[col],
+            s=marker_size, cmap=cmap, norm=norm,
+            transform=ccrs.PlateCarree(),
+            alpha=marker_alpha, edgecolors=edgecolor, linewidth=edge_lw
+        )
+        scatters.append(sc)
+
+        # Map features
+        ax.add_feature(cfeature.COASTLINE, alpha=coast_alpha)
+        ax.add_feature(cfeature.BORDERS, alpha=borders_alpha)
+        ax.add_feature(cfeature.LAND, alpha=land_alpha)
+        ax.add_feature(cfeature.OCEAN, alpha=ocean_alpha)
+        ax.add_feature(cfeature.LAKES, alpha=lakes_alpha)
+
+        # Extent
+        if extent is None:
+            buffer_val = 1.5
+            dynamic_extent = [
+                df["Longitude"].min() - buffer_val, df["Longitude"].max() + buffer_val,
+                df["Latitude"].min() - buffer_val, df["Latitude"].max() + buffer_val
+            ]
+            ax.set_extent(dynamic_extent, crs=ccrs.PlateCarree())
+        else:
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+
+        ax.set_title(title, fontsize=title_fontsize)
+        if i == 0 or cbar_mode == "each":
+            gl = ax.gridlines(draw_labels=True, dms=False, x_inline=False, y_inline=False)
+            gl.top_labels = False
+            gl.right_labels = False
+            gl.bottom_labels = True
+            gl.left_labels = True
+            # Hide grid lines (labels only)
+            try:
+                gl.xlines = gridline
+                gl.ylines = gridline
+            except Exception:
+                pass
+            gl.xlabel_style = {"size": label_fontsize}
+            gl.ylabel_style = {"size": label_fontsize}
+        else:
+            gl = ax.gridlines(draw_labels=False, dms=False, x_inline=False, y_inline=False)
+            try:
+                gl.xlines = gridline
+                gl.ylines = gridline
+            except Exception:
+                pass
+    # --- Colorbar ticks: bounds vs centers ---
+    if cbar_tick_mode == "bounds":
+        ticks = bounds
+    elif cbar_tick_mode == "centers":
+        ticks = (bounds[:-1] + bounds[1:]) / 2.0
+    else:
+        raise ValueError("cbar_tick_mode must be 'bounds' or 'centers'.")
+
+    # --- Build colorbar(s) ---
+    if cbar_mode == "single":
+        # Use a ScalarMappable so the colorbar is independent of a specific artist
+        sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+
+        # Choose pad depending on orientation (slightly larger for horizontal)
+        pad = cbar_pad_single if cbar_orientation == "vertical" else 0.08
+
+        cbar = fig.colorbar(
+            sm, ax=axs, orientation=cbar_orientation,
+            shrink=cbar_shrink, pad=pad, ticks=ticks, extend="max", spacing="proportional"
+        )
+        cbar.set_label(cbar_text, fontsize=label_fontsize + 2)
+        cbar.ax.tick_params(labelsize=label_fontsize)
+
+
+    elif cbar_mode == "each":
+        # Manually create and position colorbar axes for 'each' mode to avoid GeoAxes interaction
+        for ax, sc in zip(axs, scatters):
+            ax_pos = ax.get_position()  # Get the bounding box of the main axis
+            cax = None
+
+            # Convert string percentages to floats representing a fraction of the *axis* dimension
+            cbar_size_ratio = float(cbar_size.replace('%', '')) / 100.0
+            cbar_pad_ratio = float(cbar_pad.replace('%', '')) / 100.0
+
+            if cbar_orientation == "vertical":
+                # Calculate position for a vertical colorbar to the right of the main axis
+                # x0, y0, width, height for fig.add_axes
+                cax_width = ax_pos.width * cbar_size_ratio
+                cax_x0 = ax_pos.x1 + (ax_pos.width * cbar_pad_ratio)
+                cax_y0 = ax_pos.y0
+                cax_height = ax_pos.height
+
+                cax = fig.add_axes([cax_x0, cax_y0, cax_width, cax_height])
+
+            elif cbar_orientation == "horizontal":
+                # Calculate position for a horizontal colorbar below the main axis
+                cax_height = ax_pos.height * cbar_size_ratio
+                cax_y0 = ax_pos.y0 - (ax_pos.height * cbar_pad_ratio) - cax_height
+                cax_x0 = ax_pos.x0
+                cax_width = ax_pos.width
+
+                cax = fig.add_axes([cax_x0, cax_y0, cax_width, cax_height])
+
+            else:
+                raise ValueError("cbar_orientation must be 'vertical' or 'horizontal'.")
+
+            if cax is not None:
+                cb = plt.colorbar(
+                    sc, cax=cax, orientation=cbar_orientation,
+                    ticks=ticks, extend="max", spacing="proportional"
+                )
+                cb.set_label(cbar_text, fontsize=label_fontsize + 1)
+                cb.ax.tick_params(labelsize=label_fontsize)
+    else:
+        raise ValueError("cbar_mode must be 'single' or 'each'.")
+
+    # Remove tight_layout for 'each' mode as it conflicts with manually placed axes.
+    # It is usually still desired for 'single' mode with shared colorbar.
+    # if cbar_mode == "single":
+    #     # fig.tight_layout()
+
+    if savefile:
+        fig.savefig(savefile, bbox_inches="tight", dpi=dpi)
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
