@@ -13,7 +13,8 @@ import cartopy.feature as cfeature
 from matplotlib.colors import LogNorm
 import cdsapi
 ###############USER INPUT####################
-project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
+# project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
+project_dir          = './Dust-Tool/'
 dataset              = 'E1a'
 EEA_folder_path      = f'EEA_PM10/{dataset}'
 DOWNLOAD_EEA         = False
@@ -43,7 +44,7 @@ if (DOWNLOAD_EEA):
         "cities": [],
         "pollutants": ["PM10"],
         "dataset": 2,
-        "dateTimeStart": f"{YEAR-1}-12-30T00:00:00Z",
+        "dateTimeStart": f"{YEAR-1}-12-14T00:00:00Z",
         "dateTimeEnd": "2024-12-31T23:59:59Z",
         "aggregationType": EEA_temporal_flag,
         "email": ""
