@@ -133,80 +133,6 @@ def plot_station_timeseries(
     plt.tight_layout()
     return fig, axs
 
-
-
-def calculate_data_coverage(df, 
-                            start : str,
-                            end : str,
-                            min_pct: int =75, 
-                            date_col : str = 'Start'
- ):
-    """
-    Coverage per station across the chosen period [start, end] (inclusive).
-    Automatically handles leap years and partial ranges.
-    """
-    df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col])
-    df['tmpdate'] = df[date_col].dt.normalize()
-
-    period_start = pd.to_datetime(start) if start is not None else df['tmpdate'].min()
-    period_end   = pd.to_datetime(end)   if end   is not None else df['tmpdate'].max()
-    period_end   = period_end.normalize()
-
-    # Expected days: inclusive date range count
-    expected_days_total = pd.date_range(period_start, period_end, freq='D').size
-
-    # Observed unique days per station within window
-    observed = (
-        df[(df['tmpdate'] >= period_start) & (df['tmpdate'] <= period_end)]
-          .groupby('Samplingpoint')['tmpdate']
-          .nunique()
-          .rename('unique_days')
-          .to_frame()
-    )
-
-    observed['expected_days'] = expected_days_total
-    observed['coverage_percentage'] = (observed['unique_days'] / observed['expected_days']) * 100.0
-    observed['sufficient_coverage'] = observed['coverage_percentage'] >= float(min_pct)
-
-    return observed
-
-def compute_median_for_station(station_df: pd.DataFrame,
-                               flag_col : str = 'dust_flag',
-                               obs_col  : str = 'observed_PM10',
-                               date_col : str = 'Start',
-                               Exceedance_col : str='Exceedance'
-                               ):
-    # Sort by date
-    station_df = station_df.sort_values('Start')
-
-    # Separate nondust days
-    nondust = station_df[station_df[flag_col] == False][[date_col,obs_col]].copy()
-    nd_dates = nondust[date_col].to_numpy()
-    nd_vals = nondust[obs_col].to_numpy(dtype=float)
-
-    # Prepare result
-    result = pd.Series(index=station_df.index, dtype=float)
-
-    # Identify dust days with Exceedance
-    dust_days = station_df[(station_df[flag_col]) & (station_df[Exceedance_col])]
-
-    if nondust.empty or dust_days.empty:
-        return result
-
-    # Vectorized search for positions
-    positions = np.searchsorted(nd_dates, dust_days[date_col].to_numpy())
-
-    for i, idx in enumerate(dust_days.index):
-        pos = positions[i]
-        before_slice = nd_vals[max(0, pos-15):pos]
-        after_slice = nd_vals[pos:pos+15]
-        window = np.concatenate([before_slice, after_slice])
-        if window.size > 0:
-            result[idx] = np.median(window)
-
-    return result
-
 def plot_interactive_station_map(
     df,
     color_column,
@@ -819,3 +745,345 @@ def plot_exceedance_maps_discrete(
         plt.show()
     else:
         plt.close(fig)
+
+########################################################
+############ hourly data processing function ###########
+########################################################
+
+def eea_hourly_to_utc(series: pd.Series, source_tz: str = "CET") -> pd.Series:
+
+    """
+    Convert a pandas Series of datetimes to timezone-aware UTC, assuming the source is a fixed UTC+1.
+    - Naive timestamps are localized to the fixed-offset zone 'Etc/GMT-1' (which represents UTC+1).
+    - Already tz-aware timestamps are kept and then converted to UTC.
+    - Non-parsable values become NaT and are preserved.
+    """
+    # Parse to datetime; invalids -> NaT
+    s = pd.to_datetime(series, errors="coerce")
+
+    def _localize_if_naive(x):
+        if pd.isna(x):
+            return x
+        # naive -> localize to fixed UTC+1 (Etc/GMT-1), avoids DST issues
+        return x.tz_localize("Etc/GMT-1") if x.tzinfo is None else x
+
+    s = s.apply(_localize_if_naive)
+
+    # Convert everything to UTC, resulting dtype: datetime64[ns, UTC]
+    return s.dt.tz_convert("UTC")
+
+def filter_daily_by_coverage(
+    df_daily: pd.DataFrame,
+    day_col: str = 'day',
+    station_col: str = 'Samplingpoint',
+    reference_year: int | None = None,
+    min_pct: float = 75.0,
+    keep_coverage_columns: bool = True
+) -> pd.DataFrame:
+    """
+    Keep ALL rows for stations that have coverage >= min_pct IN the reference year.
+    Example: if a station has >=75% coverage in 2024, keep its 2023 data as well since average window need longer rolling time.
+
+    Parameters
+    ----------
+    df_daily : pd.DataFrame
+        Daily dataframe (one row per day per station).
+    day_col : str
+        Column with daily timestamp (date or datetime).
+    station_col : str
+        Station/sampling point identifier column.
+    reference_year : int | None
+        The year used to evaluate coverage. If None, coverage is evaluated
+        across ALL years (station-level over the whole dataset).
+    min_pct : float
+        Coverage threshold (default 75.0).
+    keep_coverage_columns : bool
+        If True, merge per-(station, year) coverage metrics onto the output.
+
+    Returns
+    -------
+    pd.DataFrame
+        All rows for stations that meet the coverage criterion in the reference year.
+        If keep_coverage_columns=True, includes coverage columns:
+        ['year','unique_days','total_days','coverage_percentage','sufficient_coverage'].
+    """
+    df = df_daily.copy()
+
+    # Normalize day and extract year
+    df[day_col] = pd.to_datetime(df[day_col], utc=True, errors='coerce').dt.floor('D')
+    df = df.dropna(subset=[day_col, station_col])
+    df['year'] = df[day_col].dt.year
+
+    # --- Compute coverage per (station, year) ---
+    coverage = (
+        df.groupby([station_col, 'year'])[day_col]
+          .nunique()
+          .rename('unique_days')
+          .reset_index()
+    )
+    coverage['total_days'] = coverage['year'].apply(lambda y: 366 if calendar.isleap(y) else 365)
+    coverage['coverage_percentage'] = (coverage['unique_days'] / coverage['total_days']) * 100.0
+    coverage['sufficient_coverage'] = coverage['coverage_percentage'] >= min_pct
+
+    # --- Decide which stations qualify ---
+    if reference_year is not None:
+        # Stations that meet threshold in the reference year
+        qualifying_stations = set(
+            coverage.loc[
+                (coverage['year'] == reference_year) & (coverage['sufficient_coverage']),
+                station_col
+            ].unique()
+        )
+    else:
+        # If no reference year is provided, qualify stations that meet the threshold in ANY year
+        qualifying_stations = set(
+            coverage.loc[coverage['sufficient_coverage'], station_col].unique()
+        )
+
+    # --- Keep ALL rows for qualifying stations (across all years) ---
+    out = df[df[station_col].isin(qualifying_stations)].copy()
+
+    # Optionally attach coverage metrics (for all station-years) for traceability
+    if keep_coverage_columns:
+        out = out.merge(
+            coverage,
+            on=[station_col, 'year'],
+            how='left',
+            validate='many_to_one'
+        )
+
+    return out
+
+def add_cams_daily_dust_by_station(
+    cams_ds: xr.Dataset,
+    df: pd.DataFrame,
+    var_name: str = 'dust',
+    time_col: str = 'day',
+    lat_col: str = 'Latitude',
+    lon_col: str = 'Longitude',
+    station_col: str = 'Samplingpoint',
+    spatial_method: str = 'linear'  # 'linear' (bilinear) or 'nearest'
+) -> pd.DataFrame:
+    """
+    Add CAMS daily mean dust to df efficiently by looping over unique stations.
+
+    For each station:
+      - Interpolate CAMS daily mean field once at (lat, lon) to get a time series
+      - Select nearest in time for all station rows in a single vectorized call
+
+    Parameters
+    ----------
+    cams_ds : xr.Dataset
+        CAMS dataset with dims [time, lat, lon] and variable `var_name` (e.g., 'dust').
+    df : pd.DataFrame
+        DataFrame with columns [time_col, lat_col, lon_col, station_col].
+    var_name : str
+        CAMS variable to sample (default 'dust').
+    time_col : str
+        DataFrame column name with daily timestamps (date/datetime; timezone OK).
+    lat_col, lon_col : str
+        Latitude & longitude column names in decimal degrees.
+    station_col : str
+        Station identifier column name.
+    spatial_method : str
+        'linear' (bilinear interpolation) or 'nearest' for lat/lon.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of df with a new column 'cams_dust'.
+    """
+    if var_name not in cams_ds.data_vars:
+        raise KeyError(f"Variable '{var_name}' not found in CAMS dataset.")
+    daily_cams = cams_ds
+    # Robust coord names
+    lat_name = next((d for d in daily_cams.dims if d.lower().startswith('lat')), 'lat')
+    lon_name = next((d for d in daily_cams.dims if d.lower().startswith('lon')), 'lon')
+
+    # CAMS domain bounds (for clipping)
+    lat_min = float(daily_cams[lat_name].min())
+    lat_max = float(daily_cams[lat_name].max())
+    lon_min = float(daily_cams[lon_name].min())
+    lon_max = float(daily_cams[lon_name].max())
+
+    out = df.copy()
+
+    # Normalize times: midnight UTC, then drop tz to match xarray's naive time
+    out[time_col] = (
+        pd.to_datetime(out[time_col], utc=True, errors='coerce')
+          .dt.floor('D')
+          .dt.tz_convert(None)
+    )
+
+    # Ensure numeric lat/lon
+    out[lat_col] = pd.to_numeric(out[lat_col], errors='coerce')
+    out[lon_col] = pd.to_numeric(out[lon_col], errors='coerce')
+
+    # Prepare output column
+    out['cams_dust'] = np.nan
+
+    # 2) Unique stations (first lat/lon per station)
+    stations = (
+        out[[station_col, lat_col, lon_col]]
+        .dropna(subset=[station_col, lat_col, lon_col])
+        .drop_duplicates(subset=[station_col], keep='first')
+    )
+
+    da = daily_cams[var_name]  # (time, lat, lon)
+
+    # 3) Loop over stations, do one spatial interpolation & vectorized time selection
+    for station_id, lat0, lon0 in stations.itertuples(index=False, name=None):
+        # Clip to CAMS domain to avoid NaNs at edges
+        lat0 = float(np.clip(lat0, lat_min, lat_max))
+        lon0 = float(np.clip(lon0, lon_min, lon_max))
+
+        # Interpolate the full daily time series at the station location (fast)
+        ts_station = da.interp({lat_name: lat0, lon_name: lon0}, method=spatial_method)  # dims: time
+
+        # All rows for this station
+        mask = (out[station_col] == station_id)
+        t_values = out.loc[mask, time_col].values
+
+        # Vectorized nearest-time selection for those rows
+        t_da = xr.DataArray(t_values, dims='index')  # aligns to row order
+        vals = ts_station.sel(time=t_da, method='nearest').values  # dims: index
+
+        # Optional: fallback to nearest spatial if any NaNs (e.g., outside convex hull)
+        if np.isnan(vals).any():
+            ts_station_nearest = da.interp({lat_name: lat0, lon_name: lon0}, method='nearest')
+            vals = ts_station_nearest.sel(time=t_da, method='nearest').values
+
+        out.loc[mask, 'cams_dust'] = np.asarray(vals, dtype=np.float32)
+
+    return out
+
+
+def compute_station_baseline(st_all: pd.DataFrame,
+                             st_2024: pd.DataFrame,
+                             time_col: str = 'day',
+                             value_col: str = value_col,
+                             neighbor_n: int = 15) -> pd.Series:
+    """
+    For one station:
+      - Find nondust days across ALL years (st_all)
+      - For each dust & exceedance day in st_2024, take the last `neighbor_n` nondust days before
+        and the next `neighbor_n` nondust days after -> median.
+    Returns a Series aligned to st_2024.index with medians where applicable (NaN otherwise).
+    """
+    # Nondust pool across all years
+    mask_nondust = (~st_all['dust_flag'].astype(bool)) & st_all[time_col].notna() & st_all[value_col].notna()
+    nd_times = st_all.loc[mask_nondust, time_col].to_numpy()
+    nd_vals  = st_all.loc[mask_nondust, value_col].to_numpy()
+
+    # Sort nondust by time
+    order = np.argsort(nd_times)
+    nd_times = nd_times[order]
+    nd_vals  = nd_vals[order]
+
+    # Dust & exceedance days in 2024
+    mask_dust_exc = st_2024['dust_flag'].astype(bool) & st_2024['Exceedance'].astype(bool)
+    dust_idx_2024 = st_2024.index[mask_dust_exc]
+    if dust_idx_2024.empty or nd_times.size == 0:
+        return pd.Series(index=st_2024.index, dtype='float32')  # all NaN
+
+    # Vector of target times
+    t_targets = st_2024.loc[dust_idx_2024, time_col].to_numpy()
+
+    # For each target time, find insertion position in nondust times
+    pos = np.searchsorted(nd_times, t_targets, side='left')
+
+    # Compute medians (loop over dust days of this station only; NumPy, not pandas)
+    medians = np.full(t_targets.shape[0], np.nan, dtype='float32')
+    for i, p in enumerate(pos):
+        # Previous `neighbor_n` nondust days
+        start_b = max(0, p - neighbor_n)
+        before_vals = nd_vals[start_b:p]
+
+        # Next `neighbor_n` nondust days
+        end_a = min(nd_vals.shape[0], p + neighbor_n)
+        after_vals = nd_vals[p:end_a]
+
+        window = np.concatenate([before_vals, after_vals])
+        if window.size > 0:
+            medians[i] = np.nanmedian(window)  # robust to NaNs if any slipped in
+
+    # Build result Series aligned to st_2024
+    result = pd.Series(index=st_2024.index, dtype='float32')
+    result.loc[dust_idx_2024] = medians
+    return result
+
+########################################################
+############ daily data processing function ############
+########################################################
+
+def calculate_data_coverage(df, 
+                            start : str,
+                            end : str,
+                            min_pct: int =75, 
+                            date_col : str = 'Start'
+ ):
+    """
+    Coverage per station across the chosen period [start, end] (inclusive).
+    Automatically handles leap years and partial ranges.
+    """
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df['tmpdate'] = df[date_col].dt.normalize()
+
+    period_start = pd.to_datetime(start) if start is not None else df['tmpdate'].min()
+    period_end   = pd.to_datetime(end)   if end   is not None else df['tmpdate'].max()
+    period_end   = period_end.normalize()
+
+    # Expected days: inclusive date range count
+    expected_days_total = pd.date_range(period_start, period_end, freq='D').size
+
+    # Observed unique days per station within window
+    observed = (
+        df[(df['tmpdate'] >= period_start) & (df['tmpdate'] <= period_end)]
+          .groupby('Samplingpoint')['tmpdate']
+          .nunique()
+          .rename('unique_days')
+          .to_frame()
+    )
+
+    observed['expected_days'] = expected_days_total
+    observed['coverage_percentage'] = (observed['unique_days'] / observed['expected_days']) * 100.0
+    observed['sufficient_coverage'] = observed['coverage_percentage'] >= float(min_pct)
+
+    return observed
+
+def compute_median_for_station(station_df: pd.DataFrame,
+                               flag_col : str = 'dust_flag',
+                               obs_col  : str = 'observed_PM10',
+                               date_col : str = 'Start',
+                               Exceedance_col : str='Exceedance'
+                               ):
+    # Sort by date
+    station_df = station_df.sort_values('Start')
+
+    # Separate nondust days
+    nondust = station_df[station_df[flag_col] == False][[date_col,obs_col]].copy()
+    nd_dates = nondust[date_col].to_numpy()
+    nd_vals = nondust[obs_col].to_numpy(dtype=float)
+
+    # Prepare result
+    result = pd.Series(index=station_df.index, dtype=float)
+
+    # Identify dust days with Exceedance
+    dust_days = station_df[(station_df[flag_col]) & (station_df[Exceedance_col])]
+
+    if nondust.empty or dust_days.empty:
+        return result
+
+    # Vectorized search for positions
+    positions = np.searchsorted(nd_dates, dust_days[date_col].to_numpy())
+
+    for i, idx in enumerate(dust_days.index):
+        pos = positions[i]
+        before_slice = nd_vals[max(0, pos-15):pos]
+        after_slice = nd_vals[pos:pos+15]
+        window = np.concatenate([before_slice, after_slice])
+        if window.size > 0:
+            result[idx] = np.median(window)
+
+    return result
