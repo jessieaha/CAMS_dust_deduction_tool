@@ -525,7 +525,6 @@ def until_check():
     return "util.py has been imported"
 
 
-
 def plot_exceedance_maps_discrete(
     df: pd.DataFrame,
     columns_to_plot: Sequence[str],
