@@ -14,7 +14,7 @@ from matplotlib.colors import LogNorm
 import cdsapi
 ###############USER INPUT####################
 # project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
-project_dir          = './Dust-Tool/'
+project_dir          = '.'
 dataset              = 'E1a'
 EEA_folder_path      = f'EEA_PM10/{dataset}'
 DOWNLOAD_EEA         = False

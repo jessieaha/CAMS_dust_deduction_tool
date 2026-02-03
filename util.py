@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+import xarray as xr 
 import matplotlib.pyplot as plt
+import xarray as xr
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.colors as mcolors
@@ -961,7 +963,7 @@ def add_cams_daily_dust_by_station(
 def compute_station_baseline(st_all: pd.DataFrame,
                              st_2024: pd.DataFrame,
                              time_col: str = 'day',
-                             value_col: str = value_col,
+                             value_col: str = 'observed_PM10',
                              neighbor_n: int = 15) -> pd.Series:
     """
     For one station:
