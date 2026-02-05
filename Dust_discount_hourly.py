@@ -31,21 +31,20 @@ PM10_daily_threshold = 50  # 50 µg m-3
 
 if (DOWNLOAD_EEA):
     from datetime import datetime 
-    # Specify download path
-    downloadPath = f'./EEA_data'
-    os.makedirs(downloadPath, exist_ok=True)
+    # Specify download path 
+    os.makedirs(EEA_folder_path, exist_ok=True)
 
     apiUrl = "https://eeadmz1-downloads-api-appservice.azurewebsites.net/"
     endpoint = "ParquetFile/async"
-
-    fileName = os.path.join(downloadPath, f"EEA_2024_FR.zip") 
+    zip_name = f"EEA_2024_2.zip"
+    fileName = os.path.join(EEA_folder_path, zip_name) 
     request_body = {
-        "countries": Countries,
+        "countries": ["AD", "AL", "AT", "BA", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LT", "LU", "LV", "ME", "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "SE", "SI", "SK", "XK"],
         "cities": [],
         "pollutants": ["PM10"],
         "dataset": 2,
-        "dateTimeStart": f"{YEAR-1}-12-14T00:00:00Z",
-        "dateTimeEnd": "2024-12-31T23:59:59Z",
+        "dateTimeStart": f"{YEAR-1}-12-13T00:00:00Z",
+        "dateTimeEnd": f"{YEAR-1}-12-30T23:59:59Z",
         "aggregationType": EEA_temporal_flag,
         "email": ""
     }
@@ -68,10 +67,54 @@ if (DOWNLOAD_EEA):
         fp.write(parquetResponse.content)
 
     with zipfile.ZipFile(fileName, 'r') as zip_ref:
-        zip_ref.extractall(downloadPath)
+        zip_ref.extractall(EEA_folder_path)
 ##############################################
 ##################cams data###################
 ##############################################
+if (DOWNLOAD_CAMS):
+    # !pip install --user "cdsapi>=0.7.7"
+    import cdsapi
+    VAR = "dust" #"dust" "particulate_matter_10um"
+    YEAR = 2024
+    project_dir ='./'
+    CAMS_folder_path =f'{project_dir}wp-dust/IRA_{VAR}/'
+
+    os.makedirs(CAMS_folder_path, exist_ok=True)
+
+    cams_downloads = [
+        {"filename": f"CAMS_IRA_{(YEAR-1)}_12.zip", "year": [f"{(YEAR-1)}"], "month": ["12"]},
+        {"filename": F"CAMS_IRA_{(YEAR)}_q1.zip", "year": [f"{YEAR}"], "month": ["01","02","03"]},
+        {"filename": F"CAMS_IRA_{(YEAR)}_q2.zip", "year": [f"{YEAR}"], "month": ["04","05","06"]},
+        {"filename": F"CAMS_IRA_{(YEAR)}_q3.zip", "year": [f"{YEAR}"], "month": ["07","08","09"]},
+        {"filename": F"CAMS_IRA_{(YEAR)}_q4.zip", "year": [f"{YEAR}"], "month": ["10","11","12"]}
+    ]
+
+    dataset = "cams-europe-air-quality-reanalyses"
+    client = cdsapi.Client()
+
+    for config in cams_downloads:
+        filename = os.path.join(CAMS_folder_path, config["filename"])
+        request = {
+            "variable": [VAR],
+            "model": ["ensemble"],
+            "level": ["0"],
+            "type": ["interim_reanalysis"],
+            "year": config["year"],
+            "month": config["month"]
+        }
+
+        client.retrieve(dataset, request).download(filename)
+
+
+    # Get list of all files in the current directory
+    files = glob.glob(f'{CAMS_folder_path}/*zip')
+
+    for file in files:
+
+        print(f"Extracting {file} to {CAMS_folder_path}...")
+
+        with zipfile.ZipFile(file, 'r') as zip_ref:
+            zip_ref.extractall(CAMS_folder_path)
 netcdf_files = glob.glob(os.path.join(project_dir, 'IRA_dust/cams.eaq.ira.ENSa.dust*.nc'))
 print(netcdf_files)
 # datasets = [xr.open_dataset(file) for file in netcdf_files]
@@ -142,8 +185,8 @@ obs['Validity']     = pd.to_numeric(obs['Validity'], errors='coerce')
 obs['Verification'] = pd.to_numeric(obs['Verification'], errors='coerce')
 obs['AggType']      = obs['AggType'].astype(str).str.lower()
 
-valid     = obs['Validity'].gt(0)               # > 0
-verified  = obs['Verification'].eq(1)           # == 1
+valid     = obs['Validity'].eq(1)               # > 0
+verified  = obs['Verification'].lt(3)           # <=2
 is_hourly = obs['AggType'].eq('hour')           # string match
 
 mask = valid & verified & is_hourly
