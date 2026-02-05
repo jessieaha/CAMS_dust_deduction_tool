@@ -113,6 +113,7 @@ def plot_station_timeseries(
     axs[0].axhline(y=exceedance_threshold, color='blue', linestyle=':', alpha=0.6, label=f'Exceedance ({exceedance_threshold} µg/m³)')
     axs[0].set_ylabel('PM10 (µg/m³)', fontsize=label_fontsize)
     axs[0].grid(True, alpha=0.3)
+    axs[0].tick_params(axis='x', labelcolor='black',labelsize = label_fontsize)
     axs[0].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
 
     title_alt = f" | Altitude: {altitude:.0f} m" if altitude is not None else ""
@@ -126,7 +127,9 @@ def plot_station_timeseries(
     axs[1].axhline(y=cams_dust_threshold, color='green', linestyle=':', alpha=0.6, label=f'Dust threshold ({cams_dust_threshold} µg/m³)')
     axs[1].set_xlabel('Date', fontsize=label_fontsize)
     axs[1].set_ylabel('CAMS Surface Dust (µg/m³)', fontsize=label_fontsize, color='green')
-    axs[1].tick_params(axis='y', labelcolor='green')
+    axs[1].tick_params(axis='y', labelcolor='green',labelsize = label_fontsize)
+    axs[1].tick_params(axis='x', labelcolor='black',labelsize = label_fontsize+1)
+
     axs[1].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
 
     # --- X-axis limits ---
@@ -134,6 +137,7 @@ def plot_station_timeseries(
 
     plt.tight_layout()
     return fig, axs
+
 
 def plot_interactive_station_map(
     df,
@@ -529,9 +533,12 @@ def plot_exceedance_maps_discrete(
     df: pd.DataFrame,
     columns_to_plot: Sequence[str],
     titles: Sequence[str],
-    vmax: float,
-    cbar_text: str,
+    vmax: float= None,
+    Latitude : str = 'Latitude',
+    Longitude: str = "Longitude",
+    cbar_text: str= None,
     cmap_name: str = "gist_heat_r",
+    vmin : float = 0 ,
     n_colors: int = 10,
     extent: Optional[List[float]] = None,
     gridline : bool = False ,
@@ -592,7 +599,7 @@ def plot_exceedance_maps_discrete(
 
     # --- Discrete colormap & normalization ---
     cmap = plt.get_cmap(cmap_name, n_colors)
-    bounds = np.linspace(0, vmax, n_colors + 1)
+    bounds = np.linspace(vmin, vmax, n_colors + 1)
     norm = mcolors.BoundaryNorm(bounds, cmap.N)
 
     # --- Figure & axes ---
@@ -618,7 +625,7 @@ def plot_exceedance_maps_discrete(
 
         # Scatter
         sc = ax.scatter(
-            df["Longitude"], df["Latitude"],
+            df[Longitude], df[Latitude],
             c=df[col],
             s=marker_size, cmap=cmap, norm=norm,
             transform=ccrs.PlateCarree(),
@@ -637,8 +644,8 @@ def plot_exceedance_maps_discrete(
         if extent is None:
             buffer_val = 1.5
             dynamic_extent = [
-                df["Longitude"].min() - buffer_val, df["Longitude"].max() + buffer_val,
-                df["Latitude"].min() - buffer_val, df["Latitude"].max() + buffer_val
+                df[Longitude].min() - buffer_val, df[Longitude].max() + buffer_val,
+                df[Latitude].min() - buffer_val, df[Latitude].max() + buffer_val
             ]
             ax.set_extent(dynamic_extent, crs=ccrs.PlateCarree())
         else:
