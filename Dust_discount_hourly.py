@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import time
 import calendar
 import requests
@@ -21,7 +20,7 @@ DOWNLOAD_EEA         = False
 EEA_temporal_flag    = 'hour'    # hour or day 
 DOWNLOAD_CAMS        = False
 COMPUTE_CAMS_DAILY   = False
-Countries            = []        # select countries
+Countries            = ["AD", "AL", "AT", "BA", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LT", "LU", "LV", "ME", "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "SE", "SI", "SK", "XK"]        # select countries
 YEAR                 = 2024      # int: target year 
 cams_dust_threshold  = 5         # unit: ug/m3
 PM10_daily_threshold = 50  # 50 µg m-3

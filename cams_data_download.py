@@ -2,26 +2,11 @@ import cdsapi
 import os 
 import zipfile
 import glob
-VAR = "particulate_matter_10um" #"dust"
+VAR = "dust" #"dust" "particulate_matter_10um"
 YEAR = 2024
 
-# dataset = "cams-europe-air-quality-reanalyses"
-# request = {
-#     "variable": ["particulate_matter_10um"],
-#     "model": ["ensemble"],
-#     "type": ["interim_reanalysis"],
-#     "year": ["2024"],
-#     "month": [
-#         "01", "02", "03",
-#         "04", "05", "06",
-#         "07", "08", "09",
-#         "10", "11", "12"
-#     ]
-# }
-
-# client = cdsapi.Client()
-# client.retrieve(dataset, request).download()
-project_dir ='/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/'
+# project_dir ='/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/'
+project_dir='.'
 CAMS_folder_path =f'{project_dir}wp-dust/IRA_{VAR}/'
 os.makedirs(CAMS_folder_path, exist_ok=True)
 
