@@ -38,14 +38,14 @@ if (DOWNLOAD_EEA):
     zip_name = f"EEA_2024_2.zip"
     fileName = os.path.join(EEA_folder_path, zip_name) 
     request_body = {
-        "countries": ["AD", "AL", "AT", "BA", "BE", "BG", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR", "HR", "HU", "IE", "IS", "IT", "LT", "LU", "LV", "ME", "MK", "MT", "NL", "NO", "PL", "PT", "RO", "RS", "SE", "SI", "SK", "XK"],
-        "cities": [],
-        "pollutants": ["PM10"],
-        "dataset": 2,
-        "dateTimeStart": f"{YEAR-1}-12-13T00:00:00Z",
-        "dateTimeEnd": f"{YEAR-1}-12-30T23:59:59Z",
-        "aggregationType": EEA_temporal_flag,
-        "email": ""
+        "countries"         : Countries,
+        "cities"            : [],
+        "pollutants"        : ["PM10"],
+        "dataset"           : 2,
+        "dateTimeStart"     : f"{YEAR-1}-12-13T00:00:00Z",
+        "dateTimeEnd"       : f"{YEAR}-12-31T23:59:59Z",
+        "aggregationType"   : EEA_temporal_flag,
+        "email"             : ""
     }
 
     response = requests.post(f"{apiUrl}{endpoint}", json=request_body)
