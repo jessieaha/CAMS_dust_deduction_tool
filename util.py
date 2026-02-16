@@ -1023,7 +1023,7 @@ def compute_station_baseline(st_all: pd.DataFrame,
 ########################################################
 ############ daily data processing function ############
 ########################################################
-
+#--- for EEA daily data filter functions
 def calculate_data_coverage(df, 
                             start : str,
                             end : str,
@@ -1060,6 +1060,196 @@ def calculate_data_coverage(df,
 
     return observed
 
+#--- for EEA hourly data filter functions
+def filter_daily_by_coverage(
+    df_daily: pd.DataFrame,
+    day_col: str = 'day',
+    station_col: str = 'Samplingpoint',
+    reference_year: int | None = None,
+    min_pct: float = 75.0,
+    keep_coverage_columns: bool = True
+) -> pd.DataFrame:
+    """
+    Keep ALL rows for stations that have coverage >= min_pct IN the reference year.
+    Example: if a station has >=75% coverage in 2024, keep its 2023 data as well since average window need longer rolling time.
+
+    Parameters
+    ----------
+    df_daily : pd.DataFrame
+        Daily dataframe (one row per day per station).
+    day_col : str
+        Column with daily timestamp (date or datetime).
+    station_col : str
+        Station/sampling point identifier column.
+    reference_year : int | None
+        The year used to evaluate coverage. If None, coverage is evaluated
+        across ALL years (station-level over the whole dataset).
+    min_pct : float
+        Coverage threshold (default 75.0).
+    keep_coverage_columns : bool
+        If True, merge per-(station, year) coverage metrics onto the output.
+
+    Returns
+    -------
+    pd.DataFrame
+        All rows for stations that meet the coverage criterion in the reference year.
+        If keep_coverage_columns=True, includes coverage columns:
+        ['year','unique_days','total_days','coverage_percentage','sufficient_coverage'].
+    """
+    df = df_daily.copy()
+
+    # Normalize day and extract year
+    df[day_col] = pd.to_datetime(df[day_col], utc=True, errors='coerce').dt.floor('D')
+    df = df.dropna(subset=[day_col, station_col])
+    df['year'] = df[day_col].dt.year
+
+    # --- Compute coverage per (station, year) ---
+    coverage = (
+        df.groupby([station_col, 'year'])[day_col]
+          .nunique()
+          .rename('unique_days')
+          .reset_index()
+    )
+    coverage['total_days'] = coverage['year'].apply(lambda y: 366 if calendar.isleap(y) else 365)
+    coverage['coverage_percentage'] = (coverage['unique_days'] / coverage['total_days']) * 100.0
+    coverage['sufficient_coverage'] = coverage['coverage_percentage'] >= min_pct
+
+    # --- Decide which stations qualify ---
+    if reference_year is not None:
+        # Stations that meet threshold in the reference year
+        qualifying_stations = set(
+            coverage.loc[
+                (coverage['year'] == reference_year) & (coverage['sufficient_coverage']),
+                station_col
+            ].unique()
+        )
+    else:
+        # If no reference year is provided, qualify stations that meet the threshold in ANY year
+        qualifying_stations = set(
+            coverage.loc[coverage['sufficient_coverage'], station_col].unique()
+        )
+
+    # --- Keep ALL rows for qualifying stations (across all years) ---
+    out = df[df[station_col].isin(qualifying_stations)].copy()
+
+    # Optionally attach coverage metrics (for all station-years) for traceability
+    if keep_coverage_columns:
+        out = out.merge(
+            coverage,
+            on=[station_col, 'year'],
+            how='left',
+            validate='many_to_one'
+        )
+
+    return out
+
+# --- for EEA hourly data to interpolate 
+
+def add_cams_daily_dust_by_station(
+    cams_ds: xr.Dataset,
+    df: pd.DataFrame,
+    var_name: str = 'dust',
+    time_col: str = 'day',
+    lat_col: str = 'Latitude',
+    lon_col: str = 'Longitude',
+    station_col: str = 'Samplingpoint',
+    spatial_method: str = 'linear'  # 'linear' (bilinear) or 'nearest'
+) -> pd.DataFrame:
+    """
+    Add CAMS daily mean dust to df efficiently by looping over unique stations.
+
+    For each station:
+      - Interpolate CAMS daily mean field once at (lat, lon) to get a time series
+      - Select nearest in time for all station rows in a single vectorized call
+
+    Parameters
+    ----------
+    cams_ds : xr.Dataset
+        CAMS dataset with dims [time, lat, lon] and variable `var_name` (e.g., 'dust').
+    df : pd.DataFrame
+        DataFrame with columns [time_col, lat_col, lon_col, station_col].
+    var_name : str
+        CAMS variable to sample (default 'dust').
+    time_col : str
+        DataFrame column name with daily timestamps (date/datetime; timezone OK).
+    lat_col, lon_col : str
+        Latitude & longitude column names in decimal degrees.
+    station_col : str
+        Station identifier column name.
+    spatial_method : str
+        'linear' (bilinear interpolation) or 'nearest' for lat/lon.
+
+    Returns
+    -------
+    pd.DataFrame
+        Copy of df with a new column 'cams_dust'.
+    """
+    if var_name not in cams_ds.data_vars:
+        raise KeyError(f"Variable '{var_name}' not found in CAMS dataset.")
+    daily_cams = cams_ds
+    # Robust coord names
+    lat_name = next((d for d in daily_cams.dims if d.lower().startswith('lat')), 'lat')
+    lon_name = next((d for d in daily_cams.dims if d.lower().startswith('lon')), 'lon')
+
+    # CAMS domain bounds (for clipping)
+    lat_min = float(daily_cams[lat_name].min())
+    lat_max = float(daily_cams[lat_name].max())
+    lon_min = float(daily_cams[lon_name].min())
+    lon_max = float(daily_cams[lon_name].max())
+
+    out = df.copy()
+
+    # Normalize times: midnight UTC, then drop tz to match xarray's naive time
+    out[time_col] = (
+        pd.to_datetime(out[time_col], utc=True, errors='coerce')
+          .dt.floor('D')
+          .dt.tz_convert(None)
+    )
+
+    # Ensure numeric lat/lon
+    out[lat_col] = pd.to_numeric(out[lat_col], errors='coerce')
+    out[lon_col] = pd.to_numeric(out[lon_col], errors='coerce')
+
+    # Prepare output column
+    out_name = f'cams_{var_name}'
+    out[out_name] = np.nan
+
+    # 2) Unique stations (first lat/lon per station)
+    stations = (
+        out[[station_col, lat_col, lon_col]]
+        .dropna(subset=[station_col, lat_col, lon_col])
+        .drop_duplicates(subset=[station_col], keep='first')
+    )
+
+    da = daily_cams[var_name]  # (time, lat, lon)
+
+    # 3) Loop over stations, do one spatial interpolation & vectorized time selection
+    for station_id, lat0, lon0 in stations.itertuples(index=False, name=None):
+        # Clip to CAMS domain to avoid NaNs at edges
+        lat0 = float(np.clip(lat0, lat_min, lat_max))
+        lon0 = float(np.clip(lon0, lon_min, lon_max))
+
+        # Interpolate the full daily time series at the station location (fast)
+        ts_station = da.interp({lat_name: lat0, lon_name: lon0}, method=spatial_method)  # dims: time
+
+        # All rows for this station
+        mask = (out[station_col] == station_id)
+        t_values = out.loc[mask, time_col].values
+
+        # Vectorized nearest-time selection for those rows
+        t_da = xr.DataArray(t_values, dims='index')  # aligns to row order
+        vals = ts_station.sel(time=t_da, method='nearest').values  # dims: index
+
+        # Optional: fallback to nearest spatial if any NaNs (e.g., outside convex hull)
+        if np.isnan(vals).any():
+            ts_station_nearest = da.interp({lat_name: lat0, lon_name: lon0}, method='nearest')
+            vals = ts_station_nearest.sel(time=t_da, method='nearest').values
+
+        out.loc[mask, out_name] = np.asarray(vals, dtype=np.float32)
+
+    return out
+
+#------- daily data median-------#
 def compute_median_for_station(station_df: pd.DataFrame,
                                flag_col : str = 'dust_flag',
                                obs_col  : str = 'observed_PM10',
