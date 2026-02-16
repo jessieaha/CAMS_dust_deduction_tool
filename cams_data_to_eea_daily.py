@@ -42,7 +42,13 @@ obs['Start'] = pd.to_datetime(obs['Start'])
 obs = obs[obs['AggType'] == EEA_temporal_flag].drop(
     columns=['End', 'ResultTime', 'Pollutant', 'Unit', 'DataCapture', 'FkObservationLog']
 )
-
+obs['Validity']     = pd.to_numeric(obs['Validity'], errors='coerce')
+obs['Verification'] = pd.to_numeric(obs['Verification'], errors='coerce') 
+#  filter observation data
+valid     = obs['Validity'].eq(1)               # > 0
+verified  = obs['Verification'].lt(3)           # <=2
+mask = valid & verified 
+obs = obs.loc[mask]
 # Filter for YEAR and valid stations
 stations_YEAR = obs.loc[obs['Start'].dt.year == YEAR, 'Samplingpoint'].unique()
 df_processed = obs[obs['Samplingpoint'].isin(stations_YEAR)].copy()
