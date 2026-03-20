@@ -12,8 +12,8 @@ import cartopy.feature as cfeature
 from matplotlib.colors import LogNorm
 import cdsapi
 ###############USER INPUT####################
-# project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
-project_dir          = '.'
+project_dir          = '/tsn.tno.nl/Data/SV/sv-059025_unix/ProjectData/EU/CAMS/C71/Werkdocumenten/wp-dust/'
+# project_dir          = '.'
 dataset              = 'E1a'
 EEA_folder_path      = f'EEA_PM10/{dataset}'
 DOWNLOAD_EEA         = False
@@ -136,14 +136,14 @@ if COMPUTE_CAMS_DAILY:
 else:
     daily_cams = xr.open_mfdataset(f"{project_dir}IRA_dust/cams_dust_daily_mean.nc")
 print('cams dust source:')
-print(daily_cams['dust'].dims)
+
 print(f'cams dust unit:')
 print(daily_cams['dust'].units)
 print(f'cams dust dimension:')
-print(daily_cams['dust'].units)
+print(daily_cams['dust'].dims)
 # daily data are local time zone but hourly data is in UTC+1 
 ##################################
-parquet_files = glob.glob(os.path.join(project_dir,EEA_folder_path, "*.parquet"))
+parquet_files = glob.glob(os.path.join(project_dir,EEA_folder_path,EEA_temporal_flag, "*.parquet"))
 dataframes = [pd.read_parquet(file) for file in parquet_files]
 obs = pd.concat(dataframes, ignore_index=True)
 obs['Value'] = pd.to_numeric(obs['Value'], errors='coerce').astype('float32')
@@ -319,7 +319,7 @@ del(hourly_to_daily_eea); del(obs)
 # obs = obs[obs['Samplingpoint'].isin(stations_with_2024_data)]
 
 #Load metadata observational data
-metadata = pd.read_csv('DataExtract.csv', low_memory = False)
+metadata = pd.read_csv(os.path.join( project_dir,'EEA_PM10/DataExtract.csv'), low_memory = False)
 # Retrieve stations from observational data
 all_stations = pd.DataFrame({'Samplingpoint': df_processed['Samplingpoint'].unique()})
 # Create dataframe with all stations and their location
@@ -384,13 +384,24 @@ def add_cams_daily_dust_by_station(
     lat_name = next((d for d in daily_cams.dims if d.lower().startswith('lat')), 'lat')
     lon_name = next((d for d in daily_cams.dims if d.lower().startswith('lon')), 'lon')
 
+    if lat_name not in cams_ds.dims:
+        raise KeyError(f"Variable '{lat_name}' not found in CAMS dataset.")
+    if lon_name not in cams_ds.dims:
+        raise KeyError(f"Variable '{lon_name}' not found in CAMS dataset.")
     # CAMS domain bounds (for clipping)
     lat_min = float(daily_cams[lat_name].min())
     lat_max = float(daily_cams[lat_name].max())
     lon_min = float(daily_cams[lon_name].min())
     lon_max = float(daily_cams[lon_name].max())
 
-    out = df.copy()
+    # out = df.copy()
+    # filter out all stations and data points outside of CAMS domain like 
+    # islands in Atlantics  
+    out = df[
+        df[lon_col].between(lon_min, lon_max)
+        & df[lat_col].between(lat_min, lat_max)
+    ].copy()
+
 
     # Normalize times: midnight UTC, then drop tz to match xarray's naive time
     out[time_col] = (
@@ -458,6 +469,7 @@ df = add_cams_daily_dust_by_station(
 # Example preview
 print(df.head())
 
+print('minimum latitude in df: %.1f and longitude : %.1f' %(df['Latitude'].min(), df['Longitude'].min()))
 
 ############################################
 #############average windows################
@@ -510,7 +522,7 @@ def compute_station_baseline(st_all: pd.DataFrame,
     nd_vals  = nd_vals[order]
 
     # Dust & exceedance days in 2024
-    mask_dust_exc = st_2024['dust_flag'].astype(bool) & st_2024['Exceedance'].astype(bool)
+    mask_dust_exc = st_2024['dust_flag'].astype(bool) # & st_2024['Exceedance'].astype(bool)
     dust_idx_2024 = st_2024.index[mask_dust_exc]
     if dust_idx_2024.empty or nd_times.size == 0:
         return pd.Series(index=st_2024.index, dtype='float32')  # all NaN
@@ -557,12 +569,18 @@ for station in df_2024['Samplingpoint'].cat.categories:
 ############################################
 ########Compute dust & corrected PM10#######
 ############################################ 
-dust_exceedance_mask = df_2024['dust_flag'].astype(bool) & df_2024['Exceedance'].astype(bool)
+dust_exceedance_mask = df_2024['dust_flag'].astype(bool) #& df_2024['Exceedance'].astype(bool)
 
 # Dust mass on dust-exceedance days = Value - baseline
 df_2024['Dust_contribution'] = np.where(dust_exceedance_mask,
                            df_2024[value_col] - df_2024['PM10_median'],
                            np.nan).astype('float32')
+
+negative_dust = df_2024['Dust_contribution']<0
+print(f'total negative days {negative_dust.sum()}, and proceed to correction ->')
+df_2024['Dust_contribution'] = df_2024['Dust_contribution'].clip(lower=0)
+negative_dust = df_2024['Dust_contribution']<0
+print(f'Now negative days {negative_dust.sum()}')
 
 # Corrected PM10: baseline on dust days, original on others
 df_2024['corrected_PM10'] = np.where(dust_exceedance_mask,
@@ -570,7 +588,7 @@ df_2024['corrected_PM10'] = np.where(dust_exceedance_mask,
                                      df_2024[value_col]).astype('float32')
 import pyarrow as pa
 import pyarrow.parquet as pq
-output_parquet = f'{project_dir}CAMS_dust_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}.parquet'
+output_parquet = f'{project_dir}CAMS_dust_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}_v2.parquet'
 table = pa.Table.from_pandas(df_2024)
 pqwriter = pq.ParquetWriter(output_parquet, table.schema, use_dictionary=True, compression='snappy')
 pqwriter.write_table(table)
