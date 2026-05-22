@@ -340,13 +340,17 @@ def map_timeseries_clickable_plot(
     obs_df,
     year,
     exceedance_threshold,
-    cams_dust_threshold,
-    # --- NEW: column parameters (no more fixed names) ---
-    station_col='Samplingpoint',
-    time_col='Start',
-    lat_col='Latitude',
-    lon_col='Longitude',
-    value_col='observed_PM10',
+    cams_dust_threshold, 
+    station_col    : str= 'Samplingpoint',
+    time_col       : str= 'Start',
+    observed_pm10_col : str= 'daily_mean',
+    corrected_pm10_col: str= 'corrected_PM10',
+    cams_dust_col     : str = 'cams_dust',
+    dust_flag_col     : str = 'dust_flag',
+    altitude_col      : str = 'Altitude',
+    lat_col           : str = 'Latitude', 
+    lon_col           : str = 'Longitude',
+    value_col         : str ='daily_mean',
     # --- Color & size controls ---
     cmap_name='plasma',           # any Matplotlib colormap name
     radius_range=(6, 16),         # (min_px, max_px)
@@ -497,19 +501,30 @@ def map_timeseries_clickable_plot(
                                 station_name=current_sp,
                                 obs_df=df,
                                 year=year,
+                                time_column =time_column,
+                                cams_dust_col       = cams_dust_col,
+                                dust_flag_col       = dust_flag_col,
+                                altitude_col        = altitude_col,
                                 exceedance_threshold=exceedance_threshold,
-                                cams_dust_threshold=cams_dust_threshold,
-                                value_col=value_col,  # NEW: hand over the chosen column
+                                cams_dust_threshold =cams_dust_threshold,  
+                                observed_pm10_col   = observed_pm10_col,
+                                corrected_pm10_col  = corrected_pm10_col,
                                 figsize=(12, 5),
                             )
                         except TypeError:
                             # Fallback if plot_station_timeseries doesn't accept value_col
                             fig_ts, axs = plot_station_timeseries(
                                 station_name=current_sp,
-                                obs_df=df,
-                                year=year,
-                                exceedance_threshold=exceedance_threshold,
-                                cams_dust_threshold=cams_dust_threshold,
+                                obs_df              = df,
+                                year                = year,
+                                time_column         = time_column,
+                                cams_dust_col       = cams_dust_col,
+                                dust_flag_col       = dust_flag_col,
+                                altitude_col        = altitude_col,
+                                exceedance_threshold= exceedance_threshold,
+                                cams_dust_threshold = cams_dust_threshold,  
+                                observed_pm10_col   = observed_pm10_col,
+                                corrected_pm10_col  = corrected_pm10_col,
                                 figsize=(12, 5),
                             )
                         plt.show()
@@ -528,17 +543,22 @@ def map_timeseries_clickable_plot(
 def until_check():
     return "util.py has been imported"
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+# Removed: from mpl_toolkits.axes_grid1 import make_axes_locatable (not needed for the fix)
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+from typing import List, Optional, Literal, Sequence, Tuple
 
 def plot_exceedance_maps_discrete(
     df: pd.DataFrame,
     columns_to_plot: Sequence[str],
     titles: Sequence[str],
-    vmax: float= None,
-    Latitude : str = 'Latitude',
-    Longitude: str = "Longitude",
-    cbar_text: str= None,
+    vmax: float,
+    cbar_text: str,
     cmap_name: str = "gist_heat_r",
-    vmin : float = 0 ,
     n_colors: int = 10,
     extent: Optional[List[float]] = None,
     gridline : bool = False ,
@@ -599,7 +619,7 @@ def plot_exceedance_maps_discrete(
 
     # --- Discrete colormap & normalization ---
     cmap = plt.get_cmap(cmap_name, n_colors)
-    bounds = np.linspace(vmin, vmax, n_colors + 1)
+    bounds = np.linspace(0, vmax, n_colors + 1)
     norm = mcolors.BoundaryNorm(bounds, cmap.N)
 
     # --- Figure & axes ---
@@ -625,7 +645,7 @@ def plot_exceedance_maps_discrete(
 
         # Scatter
         sc = ax.scatter(
-            df[Longitude], df[Latitude],
+            df["Longitude"], df["Latitude"],
             c=df[col],
             s=marker_size, cmap=cmap, norm=norm,
             transform=ccrs.PlateCarree(),
@@ -644,8 +664,8 @@ def plot_exceedance_maps_discrete(
         if extent is None:
             buffer_val = 1.5
             dynamic_extent = [
-                df[Longitude].min() - buffer_val, df[Longitude].max() + buffer_val,
-                df[Latitude].min() - buffer_val, df[Latitude].max() + buffer_val
+                df["Longitude"].min() - buffer_val, df["Longitude"].max() + buffer_val,
+                df["Latitude"].min() - buffer_val, df["Latitude"].max() + buffer_val
             ]
             ax.set_extent(dynamic_extent, crs=ccrs.PlateCarree())
         else:
@@ -753,6 +773,7 @@ def plot_exceedance_maps_discrete(
         plt.show()
     else:
         plt.close(fig)
+
 
 ########################################################
 ############ hourly data processing function ###########
