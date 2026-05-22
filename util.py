@@ -17,128 +17,6 @@ import matplotlib.cm as cm
 import plotly.express as px 
 import plotly.graph_objects as go
 
-def plot_station_timeseries(
-    station_name: str,
-    obs_df: pd.DataFrame,
-    station_column: str = 'Samplingpoint',
-    time_column: str = 'Start',
-    observed_pm10_col: str = 'observed_PM10',
-    corrected_pm10_col: str = 'corrected_PM10',
-    cams_dust_col: str = 'cams_dust',
-    dust_flag_col: str = 'dust_flag',
-    altitude_col : str='Altitude',
-    exceedance_threshold: float = 50.0,
-    cams_dust_threshold: float = 5.0,
-    # Plot controls
-    year: int = 2024,
-    figsize=(12, 5),
-    title_fontsize: int = 12,   # smaller title font
-    label_fontsize: int = 10,   # smaller axis label font
-    legend_fontsize: int = 9,   # smaller legend font
-):
-    """
-    Plot PM10 (observed vs. corrected) and CAMS dust for a station.
-
-    Parameters
-    ----------
-    station_name : str
-        Station identifier to select in `obs_df` 
-    obs_df : pd.DataFrame
-        Observations dataframe containing time series and flags.
-    station_column, time_column : str
-        Column names in `obs_df` for station ID and time.
-    observed_pm10_col, corrected_pm10_col : str
-        Column names for observed and corrected PM10 in `obs_df`.
-    cams_dust_col : str
-        Column name for CAMS dust values in `obs_df`.
-    dust_flag_col : str
-        Column name for dust flag (boolean) in `obs_df`.
-    exceedance_threshold : float
-        Horizontal line for exceedance threshold (µg/m³).
-    cams_dust_threshold : float
-        Horizontal line for CAMS dust threshold (µg/m³).
-    year : int
-        Year window to show on the x-axis (Jan 1 to Dec 31).
-    figsize : tuple
-        Matplotlib figure size.
-    title_fontsize, label_fontsize, legend_fontsize : int
-        Font sizes for title, axis labels, and legend.
-    """
-
-    # --- Select data for this station ---
-    station_mask = (obs_df[station_column] == station_name)
-    station_data = obs_df.loc[station_mask].copy()
-    if station_data.empty:
-        raise ValueError(f"No data found for station '{station_name}' in obs_df (column '{station_column}').")
-
-    # --- Normalize time column to datetime (UTC ok or naive) ---
-    station_data[time_column] = pd.to_datetime(station_data[time_column], errors='coerce')
-    # filter to requested year range
-    t_min = pd.Timestamp(f'{year}-01-01')
-    t_max = pd.Timestamp(f'{year}-12-31')
-    station_data = station_data[(station_data[time_column] >= t_min) & (station_data[time_column] <= t_max)]
-
-    if station_data.empty:
-        raise ValueError(f"No rows for '{station_name}' within year {year} in '{time_column}'.")
-    altitude = None
-    if not obs_df.empty and station_column in obs_df.columns:
-        alt_row = obs_df.loc[obs_df[station_column] == station_name, altitude_col]
-        if not alt_row.empty and pd.notna(alt_row.iloc[0]):
-            altitude = float(alt_row.iloc[0])
-
-    # --- Build figure ---
-    fig, axs = plt.subplots(2, 1, figsize=figsize, height_ratios=[3, 1], sharex=True)
-
-    # --- Upper panel: PM10 observed vs corrected ---
-    axs[0].plot(
-        station_data[time_column], station_data[observed_pm10_col],
-        marker='o', markersize=4, label='Original PM10',
-        linewidth=1.5, alpha=0.8
-    )
-    axs[0].plot(
-        station_data[time_column], station_data[corrected_pm10_col],
-        marker='x', markersize=4, linestyle='--', label='Corrected PM10',
-        linewidth=1.5, alpha=0.8
-    )
-
-    # Highlight dust days (only where dust_flag is True)
-    if dust_flag_col in station_data.columns:
-        dust_days = station_data[station_data[dust_flag_col].astype(bool)]
-        if not dust_days.empty:
-            axs[0].scatter(
-                dust_days[time_column], dust_days[observed_pm10_col],
-                color='red', s=30, alpha=0.7, label='Dust days', zorder=5
-            )
-
-    axs[0].axhline(y=exceedance_threshold, color='blue', linestyle=':', alpha=0.6, label=f'Exceedance ({exceedance_threshold} µg/m³)')
-    axs[0].set_ylabel('PM10 (µg/m³)', fontsize=label_fontsize)
-    axs[0].grid(True, alpha=0.3)
-    axs[0].tick_params(axis='x', labelcolor='black',labelsize = label_fontsize)
-    axs[0].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
-
-    title_alt = f" | Altitude: {altitude:.0f} m" if altitude is not None else ""
-    axs[0].set_title(f'{station_name} — PM10 Timeseries {year}{title_alt}', fontsize=title_fontsize, fontweight='bold')
-
-    # --- Lower panel: CAMS dust ---
-    axs[1].plot(
-        station_data[time_column], station_data[cams_dust_col],
-        color='green', linewidth=2, alpha=0.7, label='CAMS Dust'
-    )
-    axs[1].axhline(y=cams_dust_threshold, color='green', linestyle=':', alpha=0.6, label=f'Dust threshold ({cams_dust_threshold} µg/m³)')
-    axs[1].set_xlabel('Date', fontsize=label_fontsize)
-    axs[1].set_ylabel('CAMS Surface Dust (µg/m³)', fontsize=label_fontsize, color='green')
-    axs[1].tick_params(axis='y', labelcolor='green',labelsize = label_fontsize)
-    axs[1].tick_params(axis='x', labelcolor='black',labelsize = label_fontsize+1)
-
-    axs[1].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
-
-    # --- X-axis limits ---
-    axs[1].set_xlim(t_min, t_max)
-
-    plt.tight_layout()
-    return fig, axs
-
-
 def plot_interactive_station_map(
     df,
     color_column,
@@ -336,24 +214,146 @@ def plot_interactive_station_map(
 
     return fig
 
+def plot_station_timeseries(
+    station_name: str,
+    obs_df: pd.DataFrame,
+    station_column: str = 'Samplingpoint',
+    time_column: str = 'Start',
+    observed_pollutant_col: str = 'observed_PM10',
+    corrected_pollutant_col: str = 'corrected_PM10',
+    cams_dust_col: str = 'cams_dust', 
+    dust_flag_col: str = 'dust_flag',
+    altitude_col : str='Altitude',
+    exceedance_threshold: float = 50.0,
+    cams_dust_threshold: float = 5.0,
+    pollutant: str = 'PM10',
+    # Plot controls
+    year: int = 2024,
+    figsize=(12, 5),
+    title_fontsize: int = 12,
+    label_fontsize: int = 10,
+    legend_fontsize: int = 9,
+):
+    """
+    Plot Pollutant (observed vs. corrected) and CAMS dust for a station.
+
+    Parameters:
+    -----------
+    station_name : str
+        The unique ID of the station to plot.
+    obs_df : pd.DataFrame
+        The DataFrame containing time series observations.
+    station_column : str
+        Column name in `obs_df` identifying the station.
+    time_column : str
+        Column name for timestamps/dates.
+    observed_pollutant_col : str
+        Column name for original measured concentrations.
+    corrected_pollutant_col : str
+        Column name for concentrations after dust subtraction.
+    cams_dust_col : str
+        Column name for the CAMS dust component values.
+    dust_flag_col : str
+        Boolean column indicating if a day is flagged as a dust event.
+    altitude_col : str
+        Column name for station altitude metadata.
+    exceedance_threshold : float
+        Threshold line for original pollutant (e.g., 50 µg/m³).
+    cams_dust_threshold : float
+        Threshold line for CAMS dust flagging.
+    pollutant : str
+        Name of the pollutant (e.g., 'PM10' or 'PM2.5') for labels.
+    year : int
+        The calendar year to display.
+    """
+    # --- Select data for this station ---
+    station_mask = (obs_df[station_column] == station_name)
+    station_data = obs_df.loc[station_mask].copy()
+    if station_data.empty:
+        raise ValueError(f"No data found for station '{station_name}' in obs_df.")
+
+    # --- Normalize time column ---
+    station_data[time_column] = pd.to_datetime(station_data[time_column], errors='coerce')
+    t_min = pd.Timestamp(f'{year}-01-01')
+    t_max = pd.Timestamp(f'{year}-12-31')
+    station_data = station_data[(station_data[time_column] >= t_min) & (station_data[time_column] <= t_max)]
+
+    if station_data.empty:
+        raise ValueError(f"No rows for '{station_name}' within year {year}.")
+
+    altitude = None
+    if not obs_df.empty and station_column in obs_df.columns:
+        alt_row = obs_df.loc[obs_df[station_column] == station_name, altitude_col]
+        if not alt_row.empty and pd.notna(alt_row.iloc[0]):
+            altitude = float(alt_row.iloc[0])
+
+    fig, axs = plt.subplots(2, 1, figsize=figsize, height_ratios=[3, 1], sharex=True)
+
+    # --- Upper panel ---
+    axs[0].plot(
+        station_data[time_column], station_data[observed_pollutant_col],
+        marker='o', markersize=4, label=f'Original {pollutant}',
+        linewidth=1.5, alpha=0.8
+    )
+    axs[0].plot(
+        station_data[time_column], station_data[corrected_pollutant_col],
+        marker='x', markersize=4, linestyle='--', label=f'Corrected {pollutant}',
+        linewidth=1.5, alpha=0.8
+    )
+
+    if dust_flag_col in station_data.columns:
+        dust_days = station_data[station_data[dust_flag_col].astype(bool)]
+        if not dust_days.empty:
+            axs[0].scatter(
+                dust_days[time_column], dust_days[observed_pollutant_col],
+                color='red', s=30, alpha=0.7, label='Dust days', zorder=5
+            )
+
+    axs[0].axhline(y=exceedance_threshold, color='blue', linestyle=':', alpha=0.6, label=f'Exceedance ({exceedance_threshold} µg/m³)')
+    axs[0].set_ylabel(f'{pollutant} (µg/m³)', fontsize=label_fontsize)
+    axs[0].grid(True, alpha=0.3)
+    axs[0].tick_params(axis='x', labelsize=label_fontsize)
+    axs[0].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
+
+    title_alt = f" | Altitude: {altitude:.0f} m" if altitude is not None else ""
+    axs[0].set_title(f'{station_name} — {pollutant} Timeseries {year}{title_alt}', fontsize=title_fontsize, fontweight='bold')
+
+    # --- Lower panel ---
+    axs[1].plot(
+        station_data[time_column], station_data[cams_dust_col],
+        color='green', linewidth=2, alpha=0.7, label='CAMS Dust'
+    )
+    axs[1].axhline(y=cams_dust_threshold, color='green', linestyle=':', alpha=0.6, label=f'Dust threshold ({cams_dust_threshold} µg/m³)')
+    axs[1].set_xlabel('Date', fontsize=label_fontsize)
+    axs[1].set_ylabel('CAMS Dust (µg/m³)', fontsize=label_fontsize, color='green')
+    axs[1].tick_params(axis='y', labelcolor='green', labelsize=label_fontsize)
+    axs[1].tick_params(axis='x', labelsize=label_fontsize+1)
+    axs[1].legend(loc='upper right', fontsize=legend_fontsize, framealpha=0.4)
+    axs[1].set_xlim(t_min, t_max)
+
+    plt.tight_layout()
+    return fig, axs
 def map_timeseries_clickable_plot(
     obs_df,
     year,
     exceedance_threshold,
     cams_dust_threshold, 
+    pollutant,
     station_col    : str= 'Samplingpoint',
     time_col       : str= 'Start',
-    observed_pm10_col : str= 'daily_mean',
-    corrected_pm10_col: str= 'corrected_PM10',
+    observed_pollutant_col : str= 'daily_mean',
+    corrected_pollutant_col: str= 'corrected_pm10',
     cams_dust_col     : str = 'cams_dust',
     dust_flag_col     : str = 'dust_flag',
-    altitude_col      : str = 'Altitude',
+    altitude_col      : str = 'Altitude', 
     lat_col           : str = 'Latitude', 
     lon_col           : str = 'Longitude',
     value_col         : str ='daily_mean',
     # --- Color & size controls ---
     cmap_name='plasma',           # any Matplotlib colormap name
     radius_range=(6, 16),         # (min_px, max_px)
+    vmin=None,                    # NEW: Minimum value for color scale
+    vmax=None,                    # NEW: Maximum value for color scale
     # --- Legend controls ---
     legend_title=None,            # defaults to f"Average {value_col}"
     legend_bins=5,                # number of bins (discrete steps to represent the continuous colormap)
@@ -381,6 +381,8 @@ def map_timeseries_clickable_plot(
         Matplotlib colormap name for coloring markers.
     radius_range : (int, int)
         Pixel radius range for marker sizes (min, max).
+    vmin, vmax : float, optional
+        Manual color scale range. If None, derived from data.
     legend_title : str or None
         Title for the legend. If None, uses f"Average {value_col}".
     legend_bins : int
@@ -433,9 +435,9 @@ def map_timeseries_clickable_plot(
     def radius_for_value(val, vmin, vmax, rmin=6, rmax=16):
         return float(np.interp(val, [vmin, vmax], [rmin, rmax]))
 
-    # Scale bounds (across stations' averages)
-    vmin = float(summary[avg_col_name].min())
-    vmax = float(summary[avg_col_name].max())
+    # Scale bounds (across stations' averages) - Apply manual override if provided
+    actual_vmin = vmin if vmin is not None else float(summary[avg_col_name].min())
+    actual_vmax = vmax if vmax is not None else float(summary[avg_col_name].max())
 
     # -----------------------------
     # Build the map (centered over median coords)
@@ -455,14 +457,14 @@ def map_timeseries_clickable_plot(
     # -----------------------------
     legend_title = legend_title or f"Average {value_col}"
     # Bin edges & labels
-    edges = np.linspace(vmin, vmax, legend_bins + 1)
+    edges = np.linspace(actual_vmin, actual_vmax, legend_bins + 1)
     # Use midpoints to sample the colormap
     mids = (edges[:-1] + edges[1:]) / 2.0
 
     legend_items = {}
     for i, mid in enumerate(mids):
         label = f"{edges[i]:.{legend_round}f}–{edges[i+1]:.{legend_round}f}"
-        legend_items[label] = color_for_value(mid, vmin, vmax, cmap_name=cmap_name)
+        legend_items[label] = color_for_value(mid, actual_vmin, actual_vmax, cmap_name=cmap_name)
 
     legend = LegendControl(legend_items, title=legend_title, position=legend_position)
     m.add(legend)
@@ -477,8 +479,8 @@ def map_timeseries_clickable_plot(
         lon = float(row[lon_col])
         val = float(row[avg_col_name])
 
-        color  = color_for_value(val, vmin, vmax, cmap_name=cmap_name)
-        radius = int(radius_for_value(val, vmin, vmax, rmin=rmin, rmax=rmax))
+        color  = color_for_value(val, actual_vmin, actual_vmax, cmap_name=cmap_name)
+        radius = int(radius_for_value(val, actual_vmin, actual_vmax, rmin=rmin, rmax=rmax))
 
         marker = CircleMarker(
             location=(lat, lon),
@@ -501,15 +503,16 @@ def map_timeseries_clickable_plot(
                                 station_name=current_sp,
                                 obs_df=df,
                                 year=year,
-                                time_column =time_column,
+                                time_column =time_col,
                                 cams_dust_col       = cams_dust_col,
                                 dust_flag_col       = dust_flag_col,
                                 altitude_col        = altitude_col,
                                 exceedance_threshold=exceedance_threshold,
-                                cams_dust_threshold =cams_dust_threshold,  
-                                observed_pm10_col   = observed_pm10_col,
-                                corrected_pm10_col  = corrected_pm10_col,
+                                cams_dust_threshold =cams_dust_threshold,
+                                observed_pollutant_col   = observed_pollutant_col,
+                                corrected_pollutant_col  = corrected_pollutant_col,
                                 figsize=(12, 5),
+                                pollutant = pollutant
                             )
                         except TypeError:
                             # Fallback if plot_station_timeseries doesn't accept value_col
@@ -517,15 +520,16 @@ def map_timeseries_clickable_plot(
                                 station_name=current_sp,
                                 obs_df              = df,
                                 year                = year,
-                                time_column         = time_column,
+                                time_column         = time_col,
                                 cams_dust_col       = cams_dust_col,
                                 dust_flag_col       = dust_flag_col,
                                 altitude_col        = altitude_col,
                                 exceedance_threshold= exceedance_threshold,
-                                cams_dust_threshold = cams_dust_threshold,  
-                                observed_pm10_col   = observed_pm10_col,
-                                corrected_pm10_col  = corrected_pm10_col,
+                                cams_dust_threshold = cams_dust_threshold,
+                                observed_pollutant_col   = observed_pollutant_col,
+                                corrected_pollutant_col  = corrected_pollutant_col,
                                 figsize=(12, 5),
+                                pollutant = pollutant
                             )
                         plt.show()
                     except Exception as e:
@@ -539,6 +543,7 @@ def map_timeseries_clickable_plot(
     # Display
     # -----------------------------
     return VBox([desc, m, plot_out])
+
 
 def until_check():
     return "util.py has been imported"
