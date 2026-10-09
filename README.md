@@ -1,25 +1,220 @@
-# Introduction
-Full script for removing dust from EEA observation:
-Dust_deduction_tool_full.ipynb notebook presents the <u>** CAMS Dust Tool**</u> designed to support EU Member States in identifying and assessing natural contributions from dust to PM10 concentrations, as required by Article 16 of the Air Quality Directive (AAQD 2024/2881). The tool aims to subtract these natural dust contributions from reported PM10 concentrations to provide PM10 surface concentraton while removing natural sources.
+# CAMS Natural Dust Deduction Tool
 
-> AAQD (2024/2881) Article 16: Member states are requested to identify a) zones where exceedances of limit values for a given pollutant are attributable to natural sources and b) average exposure territorial units, where exceedances of the level determined by the average exposure reduction obligations are attributable to natural sources.
+This repository estimates how much of the particulate matter measured at European air-quality stations comes from natural Saharan and other desert dust, and subtracts that contribution from the measurements.
 
-Here, *the dust tool notebook product* supports the member states the European Commission DG-ENV had previously developed specific guidelines in 2011 (sec 2011-0208) , for the assessment of the natural contributions from dust, which need to be followed to allow subtraction of these contributions from the reported PM concentrations. The prototype focuses on daily data for Spain in 2024, demonstrating the methodology and applications.
+The main workflow is the notebook `Dust_deduction_tool_full.ipynb` (the CAMS Natural Dust Service Tool). It supports the natural-source assessment in Article 16 of the Ambient Air Quality Directive (Directive (EU) 2024/2881): identifying where limit-value exceedances are attributable to natural sources, and removing that natural dust from reported concentrations. The method follows the European Commission (DG ENV) guidance on assessing natural dust contributions ([sec 2011-0208](https://data.consilium.europa.eu/doc/document/ST%206771%202011%20INIT/EN/pdf)). Days affected by dust are identified with the CAMS European air-quality interim reanalysis dust product, and the natural contribution is estimated from the station’s own measurements on neighbouring non-dust days.
 
-# Data download 
+Created by Jessie Zhang, TNO.
 
-You can either download from the webpage https://eeadmz1-downloads-webapp.azurewebsites.net/ or use API request in the script and load the data. 
+## Notebook workflow
 
-For the metadata please download the new one through https://discomap.eea.europa.eu/App/AQViewer/index.html?fqn=Airquality_Dissem.b2g.measurements or use the 2024 one in the folder 
+The notebook runs in six stages. The chart below is the same workflow, drawn from the current notebook.
 
-Similar for the CAMS Intrim-Reanalysis product: you can download from ADS or using cams_data_download.py.
+![Dust deduction tool notebook workflow](docs/Dust_deduction_tool_flowchart.png)
 
-The Jupyternotebook can access util library share for all scrips 
+### 1. Setup and parameters
 
-### Data Preprocessing - EEA daily aggregation only 
-cams_data_to_eea_daily.py interpolate the cams data based on the local timezone of the measurement stations. The output will be a parquet file which can be read in as dataframe in the final tool.
+Section 1 installs `cartopy`, downloads `util.py` from this repository, and imports the helper functions.
 
-ps. the script will be updated for efficient use of memory and cpus. Currently to process all EEA station will take 4 hours
+Section 2 is where you set the run:
 
-# Running the tool 
-For the hourly aggregation type, run the Dust_discount_hourly.py to produce the parquet files to produce the dust contribution and corrected_PM10. Afterwards you can always read-in the data set in the notebook for visualizations. Alternatively, you can run line by line in the full dust tool ipynb to process the data. 
+| Setting | Role |
+|---|---|
+| `Countries` | One or more EEA country codes (for example `["ES"]`, or the full list of reporting countries in the notebook) |
+| `YEAR` | Calendar year to analyse |
+| `POLLUTANT` | `PM10` or `PM2.5` |
+| `dataset` | `E1a` (verified data, reported annually, available from 2013) or `E2a` (up-to-date unverified data, available from 2023) |
+| `EEA_temporal_flag` | `hour` or `day`. The working path is hourly data. Daily EEA data are not supported in the deduction yet (see [Known limitations](#known-limitations--to-do)) |
+| `USE_GOOGLE_DRIVE` | If `True` (typical in Colab), files are stored under `/content/drive/MyDrive/CAMS_Tool_output`. If `False`, they stay in the project folder |
+
+Downloads and the heavy processing only need to run once. Later runs reuse the saved files:
+
+| Flag | First run | Later runs | What it does |
+|---|---|---|---|
+| `DOWNLOAD_EEA` | `True` | `False` | Downloads EEA observations and stores them as a zip |
+| `DOWNLOAD_CAMS` | `True` | `False` | Downloads CAMS interim-reanalysis dust |
+| `COMPUTE_CAMS_DAILY` | `True` | `False` | Averages hourly CAMS dust to daily means and saves a NetCDF file |
+| `LOAD_PARQUET_DATA` | `False` | `True` | Loads the saved daily-results Parquet file and skips recomputation |
+
+Thresholds in the next cell:
+
+* `CAMS_dust_threshold` (default **5 µg/m³**): a day is a dust day when CAMS dust at the station is above this value.
+* `POLLUTANT_daily_threshold`: daily limit used for an exceedance. The notebook sets **50 µg/m³ for PM10** and **25 µg/m³ for PM2.5**.
+* `Station_Temporal_coverage` (default **65%**): minimum share of days in the selected year required to keep a station.
+* `Basline_MA_days` (default **6**): number of neighbouring non-dust days, before the day and again after it, used for the background concentration.
+
+### 2. Input data
+
+Two datasets are downloaded, plus station metadata that you supply yourself.
+
+**EEA observations.** When `DOWNLOAD_EEA` is `True`, the notebook requests Parquet data from the EEA air-quality download API for the selected countries, pollutant, dataset, and time resolution. The request runs from 14 December of the previous year through 31 December of the selected year, so the background window can be computed for the first days of the year. The zip is named `{dataset}_{POLLUTANT}_{EEA_temporal_flag}_{YEAR}.zip` and extracted under `EEA_{POLLUTANT}/{YEAR}/{dataset}/{EEA_temporal_flag}`. Large requests (many countries, or hourly data) can take several minutes. If `DOWNLOAD_EEA` is `False`, an existing zip is extracted instead.
+
+**CAMS dust.** Downloading requires a free Copernicus Atmosphere Data Store account, an API key written to `~/.cdsapirc`, and acceptance of the licence for `cams-europe-air-quality-reanalyses`. The notebook asks for the key on the first download. It retrieves the ensemble interim-reanalysis surface dust field for December of the previous year and for each quarter of the selected year (five zip files), then extracts the NetCDF files into `IRA_dust/`.
+
+**Station metadata.** EEA observations identify a station only by sampling-point id. Latitude, longitude, altitude, and time zone come from a CSV downloaded manually from the [EEA Air Quality Viewer](https://discomap.eea.europa.eu/App/AQViewer/index.html?fqn=Airquality_Dissem.b2g.measurements). Name the file `DataExtract.csv` and place it in the output folder (`CAMS_Tool_output` on Google Drive, or the project folder when `USE_GOOGLE_DRIVE` is `False`). A 2024 extract is included in this repository at `Data/DataExtract.csv`; copy or point the notebook at that file if you want to reuse it. The notebook builds the join key as the first two characters of `Air Quality Station EoI Code`, a slash, and `Sampling Point Id`.
+
+### 3. Data preparation
+
+For the hourly path (`EEA_temporal_flag == 'hour'`), and only when results are not being loaded from Parquet:
+
+1. Keep measurements with validity 1, verification 1 or 2, hourly aggregation, and a non-negative value. EEA hourly timestamps are treated as CET (fixed UTC+1) and converted to UTC.
+2. Average each station-day, and keep only days that have all 24 hours.
+3. Keep stations whose coverage in `YEAR` is at least `Station_Temporal_coverage`. Rows outside that year are kept for those stations so the background window still has the days before 1 January.
+4. Merge station coordinates from `DataExtract.csv`.
+5. If `COMPUTE_CAMS_DAILY` is `True`, combine the hourly CAMS NetCDF files and average them to UTC daily means, saved as `IRA_dust/cams_dust_{YEAR}_daily_mean.nc`. Otherwise the saved daily file is loaded. This step can exceed Colab memory; the notebook tells you to run it once on a machine with more memory and copy the NetCDF back.
+6. Drop stations outside the CAMS domain, then linearly interpolate daily CAMS dust to each station (`add_cams_daily_dust_by_station` in `util.py`).
+
+### 4. Dust deduction
+
+Each station-day receives two flags:
+
+* **Dust day** (`dust_flag`): CAMS dust at the station is above `CAMS_dust_threshold`.
+* **Exceedance** (`Exceedance`): the measured daily mean is above `POLLUTANT_daily_threshold`.
+
+Days that are both a dust day and an exceedance are the candidates for subtracting natural dust. For those days the background is the median of neighbouring non-dust days: up to `Basline_MA_days` non-dust days before the day and the same number after it (`compute_station_baseline`).
+
+On dust days the natural dust contribution is the measured concentration minus that background. The corrected concentration is the background. On all other days the measured concentration is kept. If the background is higher than the measurement, the contribution is negative; those values are set to zero. That can happen because the background is a median of surrounding days, and strong winds during a dust event can also lower local PM at some stations.
+
+An alternative formula that scales CAMS dust by the ratio of observed PM to CAMS PM is sketched in the notebook and left commented out. It is not used.
+
+### 5. Outputs
+
+When `LOAD_PARQUET_DATA` is `False`, the daily table for all stations is written as a Parquet file. With Google Drive the name is:
+
+`CAMS_dust_{POLLUTANT}_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}_MA{Basline_MA_days}.parquet`
+
+Example: `CAMS_dust_PM10_deduction_E2a_hour_2025_MA6.parquet`. A later run with `LOAD_PARQUET_DATA = True` reads that same path and skips sections 3–6. With `USE_GOOGLE_DRIVE = False` the save cell writes `CAMS_dust_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}.parquet` in the project folder (no pollutant name and no `MA` suffix), while the load cell looks for the longer name above.
+
+The daily rows are then summarised per station for the selected year:
+
+| Column | Meaning |
+|---|---|
+| `Exceedance_days` | Days the measured concentration exceeds the limit |
+| `Dust_exceedance_days` | Exceedances that no longer exceed the limit after natural dust is subtracted |
+| `NonDust_exceedance` | Exceedances that remain after the subtraction |
+| `Average_pollutant` | Measured annual mean |
+| `Average_pollutant_dust_removed` | Annual mean after subtracting natural dust |
+
+The station summary is written as CSV in the output folder:
+
+* one country: `{country code}_station_annual_{POLLUTANT}_{dataset}_{EEA_temporal_flag}_{YEAR}_MA{Basline_MA_days}.csv` (for example `ES_station_annual_PM10_E2a_hour_2025_MA6.csv`)
+* two or more countries: `muti_countries_station_annual_...csv` (the prefix is spelled that way in the notebook)
+
+### 6. Visualisation
+
+Interactive figures are aimed at Google Colab. If the widgets do not run (for example in VS Code or on an HPC node), use the static plots.
+
+* **Interactive annual map** (Plotly): colour is the annual mean after dust removal; marker size is the number of exceedance days that are not attributed to dust.
+* **Interactive station time series** (`map_timeseries_clickable_plot` in `util.py`, ipyleaflet): click a station to plot measured and corrected concentrations, with CAMS dust and the two thresholds.
+* **Static time series** (`plot_station_timeseries`): same figure for a station id you type in.
+* **Static maps** (`plot_exceedance_maps_discrete`, Cartopy): maps of any station-summary column. An *Edit here* block sets `columns_to_plot`, titles, and the colour scale. The map is limited to the countries selected in `Countries`.
+
+## Other Python files
+
+The notebook does not import these scripts, except `util.py`. Paths inside the standalone scripts still point at a TNO project directory unless you edit `project_dir`.
+
+### `util.py`
+
+Shared helpers. The notebook downloads this file from the `main` branch at the start of a run and imports it. The functions the notebook calls are:
+
+| Function | What it does |
+|---|---|
+| `until_check` | Returns a short string so you can see that the import worked |
+| `filter_daily_by_coverage` | Keeps every row for stations whose coverage in a reference year is at least `min_pct` (so days just outside that year remain available for the background window) |
+| `add_cams_daily_dust_by_station` | Interpolates a CAMS daily field to each station and attaches `cams_dust` |
+| `compute_station_baseline` | For dust days that are also exceedances, median of `neighbor_n` non-dust days before and after |
+| `plot_station_timeseries` | Measured vs corrected concentration and CAMS dust for one station |
+| `map_timeseries_clickable_plot` | ipyleaflet map; clicking a marker draws that station’s time series |
+| `plot_exceedance_maps_discrete` | Static Cartopy maps of station-summary columns |
+| `plot_interactive_station_map` | Plotly Mapbox scatter of a station table |
+| `eea_hourly_to_utc` | Treats naive EEA timestamps as fixed UTC+1 and converts them to UTC |
+| `calculate_data_coverage` | Coverage of each station between two dates (used by the daily-data branch) |
+| `compute_median_for_station` | Same background idea as `compute_station_baseline`, with a fixed window of 15 non-dust days on each side |
+
+`filter_daily_by_coverage` and `add_cams_daily_dust_by_station` are each defined twice in the file. The later definition is the one that is used. That coverage function uses the `calendar` module, which `util.py` does not import itself; the notebook assigns `util.calendar = calendar` before calling it. The notebook also pastes its own copy of `plot_exceedance_maps_discrete` into the static-map section.
+
+### `cams_data_download.py`
+
+Standalone CAMS download, separate from the notebook’s download cells.
+
+* **Inputs:** Copernicus ADS credentials in `~/.cdsapirc`. `YEAR` (default 2024) and `VAR` (default `dust`) are set at the top.
+* **What it does:** Requests `cams-europe-air-quality-reanalyses` (ensemble, surface level, interim reanalysis) for December of the previous year and for each quarter of `YEAR`, downloads five zip files, and extracts them.
+* **Outputs:** `./wp-dust/IRA_dust/CAMS_IRA_*.zip` and the extracted NetCDF files in that folder.
+* **Relation to the notebook:** Same ADS dataset and the same five-file split. The notebook writes to `IRA_dust/` (or the Google Drive copy of that folder) instead of `wp-dust/IRA_dust/`.
+
+### `cams_data_to_eea_daily.py`
+
+Preprocessor for **EEA daily** observations (the file header says it is only for that case). It is the local-time match that the notebook deduction does not use yet.
+
+* **Inputs:** EEA daily Parquet files under `{project_dir}/EEA_PM10/{dataset}/day`, `{project_dir}/EEA_PM10/DataExtract.csv`, and CAMS NetCDF files matching `{project_dir}/IRA_dust/cams.eaq.ira.ENSa.dust*.nc`. Defaults in the script are `dataset = E1a`, daily aggregation, `YEAR = 2024`, pollutant PM10, and a TNO `project_dir`.
+* **What it does:** Keeps valid, verified measurements for stations that reported in `YEAR`. Joins longitude, latitude, and time zone from the metadata. Interpolates CAMS dust to each station inside the model domain, shifts the CAMS time axis by that station’s UTC offset, and averages to a daily mean in local time.
+* **Output:** `{project_dir}/EEA_CAMS_merged_{dataset}_{EEA_temporal_flag}_{YEAR}.parquet` (PyArrow, Snappy), with a `cams_dust` column.
+* **Relation to the notebook:** This is the intended way to put CAMS dust onto EEA’s own daily values, which are stored in local time rather than UTC. The notebook does not read this Parquet file. The station loop is much heavier than the notebook’s UTC daily-mean path.
+
+### `Dust_discount_hourly.py`
+
+Standalone hourly PM10 deduction, with settings fixed in the script rather than in notebook widgets.
+
+* **Inputs:** EEA hourly Parquet under `{project_dir}/EEA_PM10/E1a/hour`, metadata `{project_dir}/EEA_PM10/DataExtract.csv`, and either raw CAMS NetCDF in `IRA_dust/` or an existing `IRA_dust/cams_dust_daily_mean.nc`. Optional flags `DOWNLOAD_EEA`, `DOWNLOAD_CAMS`, and `COMPUTE_CAMS_DAILY` default to `False`. The country list, year (2024), dust threshold (5 µg/m³), and PM10 limit (50 µg/m³) are hard-coded. `project_dir` defaults to a TNO path.
+* **What it does:** Same outline as the notebook’s hourly path: optional EEA and CAMS downloads, CET-to-UTC conversion, validity and verification filters, 24-hour daily means, a coverage filter (here 75% in 2024), metadata join, interpolation of daily CAMS dust, a dust flag, and a background median. The background uses 15 non-dust days before and after each dust day, and dust is flagged with `>= 5 µg/m³`. Negative contributions are clipped to zero. Corrected PM10 on dust days is the measurement minus that contribution.
+* **Output:** `{project_dir}CAMS_dust_deduction_{dataset}_{EEA_temporal_flag}_{YEAR}_v2.parquet`.
+* **Relation to the notebook:** An earlier, non-interactive version of the hourly calculation. The notebook does not call it and does not look for the `_v2` filename. You can still open the Parquet in the notebook if you point the load cell at it.
+
+### `storage_flowchart.py`
+
+Draws two Matplotlib figures of an earlier description of storage and processing. Running it writes, in the current directory:
+
+* `storage_flowchart.png` — download, filter, dust flag, baseline, and outputs
+* `storage_hierarchy.png` — folder layout and a short list of helper functions
+
+It does not read EEA or CAMS data and is not used by the notebook. The numbers on those figures (for example 75% coverage and a 30-day or 15-day window) are the ones that were drawn into the script; they are not the notebook defaults (65% coverage and `Basline_MA_days = 6`). The workflow chart in `docs/` is a separate image of the current notebook.
+
+## How to run
+
+### Google Colab
+
+1. Open `Dust_deduction_tool_full.ipynb` in Colab (the first notebook cell links to the copy on GitHub).
+2. Run Section 1. It installs `cartopy` and replaces the local `util.py` with the copy on the `main` branch.
+3. In Section 2, set countries, year, pollutant, dataset, and the four run flags. Leave `USE_GOOGLE_DRIVE = True` unless you have another place to store the files.
+4. Put `DataExtract.csv` in `MyDrive/CAMS_Tool_output` before the metadata step.
+5. For a first CAMS download, create an ADS account, accept the dataset licence, and paste the API key when the notebook asks.
+6. Run the notebook from top to bottom. Set `DOWNLOAD_EEA`, `DOWNLOAD_CAMS`, and `COMPUTE_CAMS_DAILY` back to `False`, and `LOAD_PARQUET_DATA` to `True`, when you only want to reload results and redraw figures.
+
+Interactive maps are written for Colab. If a widget fails, use the static time series and static maps in Section 8.
+
+### Local
+
+1. Clone the repository and install the packages listed below.
+2. In Section 2 set `USE_GOOGLE_DRIVE = False`. Outputs then go to the project directory (`project_dir = '.'`).
+3. Copy `Data/DataExtract.csv` to `./DataExtract.csv`, or download a newer extract and save it there. The notebook does not read `Data/DataExtract.csv` by itself.
+4. Run the cells in order. Skip or adapt the Colab-only lines (`google.colab`, Drive mount). Section 1 still tries to download `util.py` from GitHub; if you are editing that file locally, skip the download and import the local module instead.
+5. The clickable ipyleaflet map may not work outside Colab or Jupyter. The static plots in Section 8 do not need it.
+6. `cams_data_download.py`, `cams_data_to_eea_daily.py`, and `Dust_discount_hourly.py` are run as scripts (`python cams_data_download.py`, and likewise for the others) after you set `project_dir` and the year. They expect a `~/.cdsapirc` file when they download CAMS data.
+
+## Requirements
+
+There is no pinned environment file. The notebook and scripts import:
+
+* Notebook and `util.py`: `numpy`, `pandas`, `matplotlib`, `cartopy`, `xarray`, `netCDF4`, `plotly`, `pyarrow`, `requests`, `ipywidgets`, `ipyleaflet`
+* CAMS download (notebook and `cams_data_download.py`): `cdsapi` (>= 0.7.7)
+* `cams_data_to_eea_daily.py`: also `psutil`
+* Colab only: `google.colab` (Drive mount)
+
+`storage_flowchart.py` needs only `numpy` and `matplotlib`.
+
+## Outputs
+
+| Product | Where | Name |
+|---|---|---|
+| EEA zip | Google Drive `EEA_{POLLUTANT}/{temporal}/` or the local EEA folder | `{dataset}_{POLLUTANT}_{temporal}_{YEAR}.zip` |
+| CAMS zips and NetCDF | `IRA_dust/` (Drive or project folder) | `CAMS_IRA_*.zip`, `cams.eaq.ira.ENSa.dust*.nc` |
+| Daily CAMS field | `IRA_dust/` | `cams_dust_{YEAR}_daily_mean.nc` |
+| Daily deduction table | Google Drive output folder | `CAMS_dust_{POLLUTANT}_deduction_{dataset}_{temporal}_{YEAR}_MA{n}.parquet` |
+| Daily deduction table (local save) | Project folder | `CAMS_dust_deduction_{dataset}_{temporal}_{YEAR}.parquet` |
+| Station summary | Same output folder | `{country}_station_annual_....csv` or `muti_countries_station_annual_....csv` |
+
+Figures are shown in the notebook. The static-map function can also write a PNG if you pass `savefile`.
+
+## Known limitations / To do
+
+Using daily CAMS dust data in the deduction is not done yet. EEA daily data are stored in the station’s local time zone, not UTC, so they cannot be matched to the UTC daily CAMS means the notebook builds for hourly data. `cams_data_to_eea_daily.py` resamples CAMS onto that local day, but the notebook does not use its output. Doing that match for the full CAMS domain also needs more computing resources than Colab provides; the notebook already warns that the UTC daily-mean step may have to be run outside Colab.
