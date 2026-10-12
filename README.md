@@ -223,7 +223,7 @@ Interactive maps are written for Colab. If a widget fails, use the static time s
 
 There is no pinned environment file. The notebook and scripts import:
 
-* Notebook and `util.py`: `numpy`, `pandas`, `matplotlib`, `cartopy`, `xarray`, `netCDF4`, `scipy` (used by xarray interpolation), `plotly`, `pyarrow`, `requests`, `ipywidgets`, `ipyleaflet`
+* Notebook and `util.py`: `numpy`, `pandas`, `matplotlib`, `cartopy`, `xarray`, `netCDF4`, `scipy`, `plotly`, `pyarrow`, `requests`, `ipywidgets`, `ipyleaflet`
 * CAMS download (notebook and `cams_data_download.py`): `cdsapi` (>= 0.7.7)
 * `cams_data_to_eea_daily.py`: also `psutil`
 * Colab only: `google.colab` (Drive mount)
