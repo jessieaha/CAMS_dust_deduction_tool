@@ -1283,6 +1283,122 @@ def deduction_parquet_path(
     )
 
 
+# Clock behind the ``day`` column of each saved deduction table.
+DAY_DEFINITION = {
+    "hour": "UTC day",
+    "day": "station local day",
+}
+
+
+def tag_resolution(df: pd.DataFrame, temporal_flag: str) -> pd.DataFrame:
+    """Mark which EEA product a deduction table came from.
+
+    ``hour`` means ``day`` is a UTC day. ``day`` means ``day`` is the station's
+    local calendar date. The two labels are not the same 24-hour window.
+    """
+    if temporal_flag not in DAY_DEFINITION:
+        raise ValueError("temporal_flag must be 'hour' or 'day'.")
+    out = df.copy()
+    out["eea_resolution"] = temporal_flag
+    out["day_definition"] = DAY_DEFINITION[temporal_flag]
+    return out
+
+
+def combine_hourly_and_daily(
+    hourly: pd.DataFrame,
+    daily: pd.DataFrame,
+    *,
+    label_stations: bool = True,
+) -> pd.DataFrame:
+    """Stack the hourly and daily deduction tables for plotting.
+
+    Rows are concatenated. They are not joined on ``day``, because that column
+    is a UTC day in ``hourly`` and a station-local day in ``daily``. With
+    ``label_stations``, ``Samplingpoint`` gains the clock in parentheses so a
+    map or time series keeps the two products apart. The original id stays in
+    ``Samplingpoint_id``.
+    """
+    if hourly is None or hourly.empty:
+        raise ValueError("The hourly deduction table is empty.")
+    if daily is None or daily.empty:
+        raise ValueError("The daily deduction table is empty.")
+    frames = [
+        tag_resolution(hourly, "hour"),
+        tag_resolution(daily, "day"),
+    ]
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    out["Samplingpoint_id"] = out["Samplingpoint"].astype(str)
+    if label_stations:
+        out["Samplingpoint"] = out["Samplingpoint_id"] + " (" + out["day_definition"] + ")"
+    return out
+
+
+def load_and_combine_deduction_parquets(hourly_path: str, daily_path: str) -> pd.DataFrame:
+    """Load the two saved deduction Parquet files and stack them."""
+    missing = [path for path in (hourly_path, daily_path) if not os.path.isfile(path)]
+    if missing:
+        raise FileNotFoundError(
+            "Both the hourly and the daily deduction Parquet files are required "
+            "before they can be plotted together. Missing: " + ", ".join(missing)
+        )
+    hourly = pd.read_parquet(hourly_path)
+    daily = pd.read_parquet(daily_path)
+    combined = combine_hourly_and_daily(hourly, daily)
+    print(
+        f"Combined {len(hourly):,} hourly rows and {len(daily):,} daily rows "
+        f"into {len(combined):,} rows. "
+        "The hourly `day` is a UTC day; the daily `day` is the station local day."
+    )
+    return combined
+
+
+def station_summary_table(
+    df: pd.DataFrame,
+    pollutant_threshold: float,
+    samplingpoint_col: str = "Samplingpoint",
+) -> pd.DataFrame:
+    """Per-station summary used by the notebook maps.
+
+    ``Dust_exceedance`` is a day when the measurement is above the limit and
+    the corrected concentration is at or below it. Grouping follows
+    ``samplingpoint_col``, so a combined table with clock labels in
+    ``Samplingpoint`` keeps the hourly and daily products as separate rows.
+    """
+    work = df.copy()
+    work["Dust_exceedance"] = (work["daily_mean"] > pollutant_threshold) & (
+        work["corrected_pollutant"] <= pollutant_threshold
+    )
+    named = {
+        "Latitude": ("Latitude", "first"),
+        "Longitude": ("Longitude", "first"),
+        "Altitude": ("Altitude", "first"),
+        "Exceedance_days": ("Exceedance", "sum"),
+        "Dust_exceedance_days": ("Dust_exceedance", "sum"),
+        "Average_pollutant": ("daily_mean", "mean"),
+        "Average_pollutant_dust_removed": ("corrected_pollutant", "mean"),
+    }
+    if "eea_resolution" in work.columns and samplingpoint_col != "eea_resolution":
+        named["eea_resolution"] = ("eea_resolution", "first")
+        named["day_definition"] = ("day_definition", "first")
+    table = work.groupby(samplingpoint_col, as_index=False, observed=False).agg(**named)
+    table["NonDust_exceedance"] = table["Exceedance_days"] - table["Dust_exceedance_days"]
+    column_order = [
+        samplingpoint_col,
+        "eea_resolution",
+        "day_definition",
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Exceedance_days",
+        "Dust_exceedance_days",
+        "NonDust_exceedance",
+        "Average_pollutant",
+        "Average_pollutant_dust_removed",
+    ]
+    column_order = [col for col in column_order if col in table.columns]
+    return table[column_order]
+
+
 def metadata_path_for(persistent_dir: str, project_dir: str) -> str:
     candidates = [
         os.path.join(persistent_dir, "DataExtract.csv"),
