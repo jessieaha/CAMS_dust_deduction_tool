@@ -8,7 +8,7 @@ Created by Jessie Zhang, TNO.
 
 ## Notebook workflow
 
-The notebook runs in six stages. The chart below is the same workflow, drawn from the current notebook.
+The notebook runs in six stages. The chart below is the hourly workflow, drawn from the current notebook. With `EEA_temporal_flag = 'day'` the UTC daily-grid step is replaced by a per-station local-day CAMS mean (section 4.5).
 
 ![Dust deduction tool notebook workflow](docs/Dust_deduction_tool_flowchart.png)
 
@@ -24,7 +24,8 @@ Section 2 is where you set the run:
 | `YEAR` | Calendar year to analyse |
 | `POLLUTANT` | `PM10` or `PM2.5` |
 | `dataset` | `E1a` (verified data, reported annually, available from 2013) or `E2a` (up-to-date unverified data, available from 2023) |
-| `EEA_temporal_flag` | `hour` or `day`. The working path is hourly data. Daily EEA data are not supported in the deduction yet (see [Known limitations](#known-limitations--to-do)) |
+| `EEA_temporal_flag` | `hour` or `day`. `hour` is the original path: EEA hourly values are treated as fixed UTC+1 and CAMS is averaged on UTC days. `day` uses EEA’s own daily values, which are in station local time, and sets `USE_DAILY_CAMS` |
+| `USE_DAILY_CAMS` | `False` on the hourly path. Set `True` together with `EEA_temporal_flag = 'day'` (the notebook does this automatically). CAMS dust is then averaged over each station’s local day by `cams_data_to_eea_daily.py` |
 | `USE_GOOGLE_DRIVE` | If `True` (typical in Colab), files are stored under `/content/drive/MyDrive/CAMS_Tool_output`. If `False`, they stay in the project folder |
 
 Downloads and the heavy processing only need to run once. Later runs reuse the saved files:
@@ -33,7 +34,8 @@ Downloads and the heavy processing only need to run once. Later runs reuse the s
 |---|---|---|---|
 | `DOWNLOAD_EEA` | `True` | `False` | Downloads EEA observations and stores them as a zip |
 | `DOWNLOAD_CAMS` | `True` | `False` | Downloads CAMS interim-reanalysis dust |
-| `COMPUTE_CAMS_DAILY` | `True` | `False` | Averages hourly CAMS dust to daily means and saves a NetCDF file |
+| `COMPUTE_CAMS_DAILY` | `True` | `False` | Rebuilds daily CAMS dust. Hourly runs write a UTC daily grid. Daily runs rebuild the per-station local-day table; monthly station caches are still reused |
+| `USE_DAILY_CAMS` | `True` with `EEA_temporal_flag = 'day'` | `False` for hourly data | Averages CAMS over each station’s local day instead of a single UTC day |
 | `LOAD_PARQUET_DATA` | `False` | `True` | Loads the saved daily-results Parquet file and skips recomputation |
 
 Thresholds in the next cell:
@@ -63,6 +65,32 @@ For the hourly path (`EEA_temporal_flag == 'hour'`), and only when results are n
 4. Merge station coordinates from `DataExtract.csv`.
 5. If `COMPUTE_CAMS_DAILY` is `True`, combine the hourly CAMS NetCDF files and average them to UTC daily means, saved as `IRA_dust/cams_dust_{YEAR}_daily_mean.nc`. Otherwise the saved daily file is loaded. This step can exceed Colab memory; the notebook tells you to run it once on a machine with more memory and copy the NetCDF back.
 6. Drop stations outside the CAMS domain, then linearly interpolate daily CAMS dust to each station (`add_cams_daily_dust_by_station` in `util.py`).
+
+For the daily path (`EEA_temporal_flag = 'day'`, which turns `USE_DAILY_CAMS` on):
+
+1. Load the same EEA Parquet extract. Keep validity 1, verification below 3, aggregation `day`, and non-negative values. `Start` is left as the station’s local calendar date. It is not passed through `eea_to_utc`.
+2. Apply the same coverage filter and merge `DataExtract.csv`, including `Timezone`.
+3. Skip the full-domain UTC daily grid. `add_cams_local_daily_dust` in `cams_data_to_eea_daily.py` reads hourly CAMS one UTC day at a time, interpolates only the station locations, and averages each station over its own local day (see [Time zones](#time-zones) below).
+4. The table that comes back has the same columns the hourly path uses (`day`, `daily_mean`, `cams_dust`, coordinates). Dust flags, the background median, the corrected concentration, the station summary, and the plots then run unchanged.
+
+### Time zones
+
+EEA hourly stamps are naive clock times that the notebook treats as fixed UTC+1 (`Etc/GMT-1`, no daylight-saving time) and converts to UTC with `eea_to_utc`. The daily mean is then a UTC day. That conversion is the wrong one for EEA daily values: those stamps are already the local time of the station, and a blanket UTC+1 shift would move a `UTC+02` or `UTC` station onto another date.
+
+`Timezone` in `DataExtract.csv` is a fixed offset such as `UTC`, `UTC+01`, or `UTC-04`. For a station with offset *h* hours, the CAMS mean for local day D is the mean of the UTC hours in `[D 00:00 − h, D+1 00:00 − h)`. The join to the observation is that local calendar date. A day with fewer than 18 equivalent hours of CAMS data (75% of a 24-hour day; the same fraction is used if the file is not hourly) is left missing rather than filled from the nearest day. Daylight-saving transitions are not applied, which matches the hourly path’s fixed offset.
+
+### Memory and Drive cache
+
+The daily path never loads a full hourly CAMS grid. Each NetCDF file is opened lazily, cut to the station bounding box and the dust variable, and read one UTC day at a time as float32. Only the interpolated station series is kept. After each day the day-sized array is released.
+
+Intermediate files follow the notebook’s Drive layout (`/content/drive/MyDrive/CAMS_Tool_output` when `USE_GOOGLE_DRIVE` is `True`, otherwise the project folder):
+
+| File | Role |
+|---|---|
+| `IRA_dust/cams_dust_station_hourly_<stations>_<source>.parquet` | Hourly dust at the stations for one CAMS file. Reused on the next run, including when `COMPUTE_CAMS_DAILY` is `True` |
+| `IRA_dust/cams_dust_local_daily_stations_<stations>_<year>_h18.parquet` | Local-day means. Reused when `COMPUTE_CAMS_DAILY` is `False` |
+
+`<stations>` is a short hash of the station coordinates and time-zone offsets, so a different country list does not reuse the wrong cache. December of the previous year is included, because a positive offset reaches back into 31 December and the EEA request itself starts on 14 December.
 
 ### 4. Dust deduction
 
@@ -144,12 +172,12 @@ Standalone CAMS download, separate from the notebook’s download cells.
 
 ### `cams_data_to_eea_daily.py`
 
-Preprocessor for **EEA daily** observations (the file header says it is only for that case). It is the local-time match that the notebook deduction does not use yet.
+Daily-observation counterpart of `Dust_discount_hourly.py`. The notebook calls it when `EEA_temporal_flag` is `day`. Importing the module does not download or compute; `python cams_data_to_eea_daily.py` runs `main()`.
 
-* **Inputs:** EEA daily Parquet files under `{project_dir}/EEA_PM10/{dataset}/day`, `{project_dir}/EEA_PM10/DataExtract.csv`, and CAMS NetCDF files matching `{project_dir}/IRA_dust/cams.eaq.ira.ENSa.dust*.nc`. Defaults in the script are `dataset = E1a`, daily aggregation, `YEAR = 2024`, pollutant PM10, and a TNO `project_dir`.
-* **What it does:** Keeps valid, verified measurements for stations that reported in `YEAR`. Joins longitude, latitude, and time zone from the metadata. Interpolates CAMS dust to each station inside the model domain, shifts the CAMS time axis by that station’s UTC offset, and averages to a daily mean in local time.
-* **Output:** `{project_dir}/EEA_CAMS_merged_{dataset}_{EEA_temporal_flag}_{YEAR}.parquet` (PyArrow, Snappy), with a `cams_dust` column.
-* **Relation to the notebook:** This is the intended way to put CAMS dust onto EEA’s own daily values, which are stored in local time rather than UTC. The notebook does not read this Parquet file. The station loop is much heavier than the notebook’s UTC daily-mean path.
+* **Inputs:** The same settings as the notebook, at the top of the file: `Countries`, `YEAR`, `POLLUTANT` (`PM10` or `PM2.5`), `dataset` (`E1a` or `E2a`), `EEA_temporal_flag = 'day'`, `DOWNLOAD_EEA`, `DOWNLOAD_CAMS`, `COMPUTE_CAMS_DAILY`, `USE_GOOGLE_DRIVE`, dust threshold, coverage (default 65%), and `Basline_MA_days` (default 6). EEA data come from the same download API as the notebook (dataset id 1 for `E2a`, 2 for `E1a`, 14 December of the previous year through 31 December, `aggregationType` `day`). An existing zip is extracted when `DOWNLOAD_EEA` is `False`. CAMS is the same five-file interim-reanalysis request. Station coordinates and `Timezone` come from `DataExtract.csv` in the output folder, or from `Data/DataExtract.csv` if that is the copy you have.
+* **What it does:** Filters daily EEA values the way the notebook filters hourly values (validity, verification, non-negative), without converting local dates to UTC. Keeps stations that meet the coverage rule. Builds CAMS daily means on each station’s local day, in memory-safe chunks, and reuses Drive or local Parquet caches. Then applies the same dust flag (`cams_dust` above the threshold), exceedance flag, neighbour-median background, and clipped dust contribution as the notebook. The background is computed only on days that are both dusty and an exceedance, matching `util.compute_station_baseline` (the hourly script still has the exceedance term commented out).
+* **Output:** `CAMS_dust_{POLLUTANT}_deduction_{dataset}_day_{YEAR}_MA{Basline_MA_days}.parquet` in the Google Drive output folder or the project folder. Columns match the notebook (`day`, `daily_mean`, `cams_dust`, `dust_flag`, `Exceedance`, `pollutant_median`, `Dust_contribution`, `corrected_pollutant`, coordinates), so `LOAD_PARQUET_DATA = True` reads this file the same way it reads an hourly result. The filename includes the time resolution, so it does not overwrite an hourly run.
+* **Relation to the notebook:** Section 4 of the notebook calls `load_and_filter_eea_daily` and `add_cams_local_daily_dust`, then continues with the existing deduction, summary, and plots. Running the script by itself performs that whole chain and writes the Parquet the notebook would load.
 
 ### `Dust_discount_hourly.py`
 
@@ -174,8 +202,8 @@ It does not read EEA or CAMS data and is not used by the notebook. The numbers o
 ### Google Colab
 
 1. Open `Dust_deduction_tool_full.ipynb` in Colab (the first notebook cell links to the copy on GitHub).
-2. Run Section 1. It installs `cartopy` and replaces the local `util.py` with the copy on the `main` branch.
-3. In Section 2, set countries, year, pollutant, dataset, and the four run flags. Leave `USE_GOOGLE_DRIVE = True` unless you have another place to store the files.
+2. Run Section 1. It installs `cartopy` and replaces the local `util.py` with the copy on the `main` branch. The daily path also needs `cams_data_to_eea_daily.py` in the working directory (clone the repository, or upload the file). If that file is missing, the daily cell downloads whatever is on `main`.
+3. In Section 2, set countries, year, pollutant, dataset, and the run flags. Leave `USE_GOOGLE_DRIVE = True` unless you have another place to store the files. For EEA daily data set `EEA_temporal_flag = 'day'` (this turns on `USE_DAILY_CAMS`). Leave it as `hour` to keep the UTC daily-mean path.
 4. Put `DataExtract.csv` in `MyDrive/CAMS_Tool_output` before the metadata step.
 5. For a first CAMS download, create an ADS account, accept the dataset licence, and paste the API key when the notebook asks.
 6. Run the notebook from top to bottom. Set `DOWNLOAD_EEA`, `DOWNLOAD_CAMS`, and `COMPUTE_CAMS_DAILY` back to `False`, and `LOAD_PARQUET_DATA` to `True`, when you only want to reload results and redraw figures.
@@ -195,7 +223,7 @@ Interactive maps are written for Colab. If a widget fails, use the static time s
 
 There is no pinned environment file. The notebook and scripts import:
 
-* Notebook and `util.py`: `numpy`, `pandas`, `matplotlib`, `cartopy`, `xarray`, `netCDF4`, `plotly`, `pyarrow`, `requests`, `ipywidgets`, `ipyleaflet`
+* Notebook and `util.py`: `numpy`, `pandas`, `matplotlib`, `cartopy`, `xarray`, `netCDF4`, `scipy` (used by xarray interpolation), `plotly`, `pyarrow`, `requests`, `ipywidgets`, `ipyleaflet`
 * CAMS download (notebook and `cams_data_download.py`): `cdsapi` (>= 0.7.7)
 * `cams_data_to_eea_daily.py`: also `psutil`
 * Colab only: `google.colab` (Drive mount)
@@ -208,7 +236,9 @@ There is no pinned environment file. The notebook and scripts import:
 |---|---|---|
 | EEA zip | Google Drive `EEA_{POLLUTANT}/{temporal}/` or the local EEA folder | `{dataset}_{POLLUTANT}_{temporal}_{YEAR}.zip` |
 | CAMS zips and NetCDF | `IRA_dust/` (Drive or project folder) | `CAMS_IRA_*.zip`, `cams.eaq.ira.ENSa.dust*.nc` |
-| Daily CAMS field | `IRA_dust/` | `cams_dust_{YEAR}_daily_mean.nc` |
+| Daily CAMS field (hourly path, UTC) | `IRA_dust/` | `cams_dust_{YEAR}_daily_mean.nc` |
+| Station-hourly CAMS cache (daily path) | `IRA_dust/` on Drive or in the project folder | `cams_dust_station_hourly_<stations>_<source>.parquet` |
+| Local-day CAMS cache (daily path) | `IRA_dust/` on Drive or in the project folder | `cams_dust_local_daily_stations_<stations>_<year>_h18.parquet` |
 | Daily deduction table | Google Drive output folder | `CAMS_dust_{POLLUTANT}_deduction_{dataset}_{temporal}_{YEAR}_MA{n}.parquet` |
 | Daily deduction table (local save) | Project folder | `CAMS_dust_deduction_{dataset}_{temporal}_{YEAR}.parquet` |
 | Station summary | Same output folder | `{country}_station_annual_....csv` or `muti_countries_station_annual_....csv` |
@@ -217,4 +247,10 @@ Figures are shown in the notebook. The static-map function can also write a PNG 
 
 ## Known limitations / To do
 
-Using daily CAMS dust data in the deduction is not done yet. EEA daily data are stored in the station’s local time zone, not UTC, so they cannot be matched to the UTC daily CAMS means the notebook builds for hourly data. `cams_data_to_eea_daily.py` resamples CAMS onto that local day, but the notebook does not use its output. Doing that match for the full CAMS domain also needs more computing resources than Colab provides; the notebook already warns that the UTC daily-mean step may have to be run outside Colab.
+Daily CAMS dust is now part of the deduction when `EEA_temporal_flag` is `day`. A few limits remain:
+
+* **Daylight-saving time is not modelled.** Both paths use the fixed offset in the data: UTC+1 for every hourly stamp, and the `Timezone` label for each daily station. If a country builds its official daily value in civil time, the hour of a spring or autumn transition can sit in the neighbouring local day.
+* **The hourly path’s UTC grid can still exceed Colab memory.** `COMPUTE_CAMS_DAILY` on `EEA_temporal_flag = 'hour'` still averages the full CAMS domain. The daily path avoids that by sampling stations one UTC day at a time. It still needs the hourly NetCDF files on disk for the first run, and a Copernicus ADS key to download them.
+* **Stations outside the CAMS European domain are dropped** on both paths (for example some overseas territories whose metadata offset is `UTC-04` or `UTC+04`).
+* **A local day is kept only when at least 75% of its CAMS hours are present** (18 hours for hourly files). The first and last days of the archive can be missing for stations whose offset reaches outside the downloaded hours.
+* The workflow chart in `docs/` shows the hourly path. The daily branch is the extra step in section 4.5 of the notebook.
