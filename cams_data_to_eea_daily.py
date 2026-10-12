@@ -64,7 +64,7 @@ Countries = [
 ]
 DOWNLOAD_EEA = False
 DOWNLOAD_CAMS = False
-COMPUTE_CAMS_DAILY = False      # True: rebuild local-daily means (monthly caches still reused)
+COMPUTE_CAMS_DAILY = False      # True: rebuild local-daily means (monthly caches still reused). DOWNLOAD_CAMS forces this on.
 USE_GOOGLE_DRIVE = False        # True: same Drive folder as the notebook
 GDRIVE_OUTPUT_DIR = "/content/drive/MyDrive/CAMS_Tool_output"
 VAR = "dust"
@@ -386,35 +386,99 @@ def cams_download_plan(year: int) -> list[dict]:
     ]
 
 
+def resolve_run_flags(
+    *,
+    download_eea: bool,
+    download_cams: bool,
+    compute_cams_daily: bool,
+    load_parquet: bool,
+    eea_temporal_flag: str,
+) -> dict:
+    """Collapse the notebook switches that otherwise contradict each other.
+
+    ``DOWNLOAD_CAMS`` means new hourly CAMS files, so the daily product has to
+    be rebuilt (``compute_cams_daily``). How that average is taken follows
+    ``eea_temporal_flag``: ``hour`` is a UTC day, ``day`` is each station's
+    local day. A new download or a new daily product cannot be skipped by
+    loading the previous deduction Parquet.
+    """
+    if eea_temporal_flag not in ("hour", "day"):
+        raise ValueError("EEA_temporal_flag must be 'hour' or 'day'.")
+    notes: list[str] = []
+    if download_cams and not compute_cams_daily:
+        compute_cams_daily = True
+        notes.append("DOWNLOAD_CAMS is True, so COMPUTE_CAMS_DAILY has been set to True.")
+    if (download_eea or download_cams or compute_cams_daily) and load_parquet:
+        load_parquet = False
+        notes.append(
+            "LOAD_PARQUET_DATA has been set to False so the new download or daily CAMS product is used."
+        )
+    return {
+        "download_eea": bool(download_eea),
+        "download_cams": bool(download_cams),
+        "compute_cams_daily": bool(compute_cams_daily),
+        "load_parquet": bool(load_parquet),
+        "eea_temporal_flag": eea_temporal_flag,
+        "local_day": eea_temporal_flag == "day",
+        "notes": notes,
+    }
+
+
+def stored_cams_zip(persistent_dir: str, project_dir: str, var: str, filename: str) -> str:
+    """Path of a CAMS zip in the output folder (Google Drive when that is on).
+
+    A zip that exists only next to the extracted NetCDF is copied into the
+    output folder. The hourly NetCDF is not copied there.
+    """
+    import shutil
+
+    zip_dir = os.path.join(persistent_dir, f"IRA_{var}")
+    os.makedirs(zip_dir, exist_ok=True)
+    stored = os.path.join(zip_dir, filename)
+    local = os.path.join(project_dir, f"IRA_{var}", filename)
+    if (
+        not os.path.isfile(stored)
+        and os.path.isfile(local)
+        and os.path.abspath(stored) != os.path.abspath(local)
+    ):
+        print(f"Saving CAMS zip to the output folder: {stored}")
+        shutil.copy2(local, stored)
+    return stored
+
+
 def download_and_extract_cams(
     project_dir: str,
     persistent_dir: str,
     year: int,
     var: str,
     download: bool,
+    extract: bool = True,
 ) -> str:
-    """Download and extract CAMS interim-reanalysis dust like the notebook.
+    """Download CAMS zips into the output folder and optionally extract them.
 
-    Zips are stored in ``IRA_{var}/`` under the persistent directory (Drive
-    when that is on). NetCDF files are extracted to ``project_dir/IRA_{var}/``.
-    Existing zips and existing NetCDF files are reused.
+    The zip is the stored file (Google Drive when ``persistent_dir`` is the
+    Drive output folder). Hourly NetCDF is extracted to ``project_dir/IRA_{var}``
+    only when ``extract`` is true, which is the daily-mean step of a run.
+    Extracted NetCDF is not written back to Drive.
     """
     import zipfile
 
-    zip_dir = os.path.join(persistent_dir, f"IRA_{var}")
     extract_dir = os.path.join(project_dir, f"IRA_{var}")
-    os.makedirs(zip_dir, exist_ok=True)
     os.makedirs(extract_dir, exist_ok=True)
+    zip_dir = os.path.join(persistent_dir, f"IRA_{var}")
+    print(f"CAMS zip folder: {zip_dir}")
+    if extract:
+        print(f"Hourly NetCDF for this run only: {extract_dir}")
 
     client = None
     for config in cams_download_plan(year):
-        zip_file_path = os.path.join(zip_dir, config["filename"])
+        zip_file_path = stored_cams_zip(persistent_dir, project_dir, var, config["filename"])
         if download and not os.path.exists(zip_file_path):
             import cdsapi
 
             if client is None:
                 client = cdsapi.Client()
-            print(f"Downloading CAMS data to {zip_file_path}...")
+            print(f"Downloading CAMS zip to {zip_file_path}...")
             request = {
                 "variable": [var],
                 "model": ["ensemble"],
@@ -426,20 +490,16 @@ def download_and_extract_cams(
             client.retrieve(CAMS_DATASET_NAME, request).download(zip_file_path)
             print(f"Download Successful: {config['filename']}")
 
-        sample_month = config["month"][0]
-        sample_year = config["year"][0]
-        expected = os.path.join(
-            extract_dir, f"cams.eaq.ira.ENSa.{var}.l0.{sample_year}-{sample_month}.nc"
-        )
-        if os.path.exists(zip_file_path) and not os.path.exists(expected):
-            print(f"Extracting CAMS data from: {zip_file_path}")
-            with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
-                zip_ref.extractall(extract_dir)
-            print(f"CAMS data extracted to {extract_dir}.")
-        elif os.path.exists(expected):
-            print(f"CAMS data for {config['filename']} already extracted. Skipping.")
-        elif download:
-            print(f"CAMS data file not found at {zip_file_path}.")
+        if not os.path.exists(zip_file_path):
+            print(f"CAMS zip not found: {zip_file_path}. Set DOWNLOAD_CAMS=True to fetch it.")
+            continue
+        if not extract:
+            print(f"Keeping zip {config['filename']}. Not extracted in this run.")
+            continue
+        print(f"Extracting {zip_file_path} for this run...")
+        with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)
+        print(f"Extracted to {extract_dir}. The zip stays in the output folder.")
     return extract_dir
 
 
@@ -1223,6 +1283,122 @@ def deduction_parquet_path(
     )
 
 
+# Clock behind the ``day`` column of each saved deduction table.
+DAY_DEFINITION = {
+    "hour": "UTC day",
+    "day": "station local day",
+}
+
+
+def tag_resolution(df: pd.DataFrame, temporal_flag: str) -> pd.DataFrame:
+    """Mark which EEA product a deduction table came from.
+
+    ``hour`` means ``day`` is a UTC day. ``day`` means ``day`` is the station's
+    local calendar date. The two labels are not the same 24-hour window.
+    """
+    if temporal_flag not in DAY_DEFINITION:
+        raise ValueError("temporal_flag must be 'hour' or 'day'.")
+    out = df.copy()
+    out["eea_resolution"] = temporal_flag
+    out["day_definition"] = DAY_DEFINITION[temporal_flag]
+    return out
+
+
+def combine_hourly_and_daily(
+    hourly: pd.DataFrame,
+    daily: pd.DataFrame,
+    *,
+    label_stations: bool = True,
+) -> pd.DataFrame:
+    """Stack the hourly and daily deduction tables for plotting.
+
+    Rows are concatenated. They are not joined on ``day``, because that column
+    is a UTC day in ``hourly`` and a station-local day in ``daily``. With
+    ``label_stations``, ``Samplingpoint`` gains the clock in parentheses so a
+    map or time series keeps the two products apart. The original id stays in
+    ``Samplingpoint_id``.
+    """
+    if hourly is None or hourly.empty:
+        raise ValueError("The hourly deduction table is empty.")
+    if daily is None or daily.empty:
+        raise ValueError("The daily deduction table is empty.")
+    frames = [
+        tag_resolution(hourly, "hour"),
+        tag_resolution(daily, "day"),
+    ]
+    out = pd.concat(frames, ignore_index=True, sort=False)
+    out["Samplingpoint_id"] = out["Samplingpoint"].astype(str)
+    if label_stations:
+        out["Samplingpoint"] = out["Samplingpoint_id"] + " (" + out["day_definition"] + ")"
+    return out
+
+
+def load_and_combine_deduction_parquets(hourly_path: str, daily_path: str) -> pd.DataFrame:
+    """Load the two saved deduction Parquet files and stack them."""
+    missing = [path for path in (hourly_path, daily_path) if not os.path.isfile(path)]
+    if missing:
+        raise FileNotFoundError(
+            "Both the hourly and the daily deduction Parquet files are required "
+            "before they can be plotted together. Missing: " + ", ".join(missing)
+        )
+    hourly = pd.read_parquet(hourly_path)
+    daily = pd.read_parquet(daily_path)
+    combined = combine_hourly_and_daily(hourly, daily)
+    print(
+        f"Combined {len(hourly):,} hourly rows and {len(daily):,} daily rows "
+        f"into {len(combined):,} rows. "
+        "The hourly `day` is a UTC day; the daily `day` is the station local day."
+    )
+    return combined
+
+
+def station_summary_table(
+    df: pd.DataFrame,
+    pollutant_threshold: float,
+    samplingpoint_col: str = "Samplingpoint",
+) -> pd.DataFrame:
+    """Per-station summary used by the notebook maps.
+
+    ``Dust_exceedance`` is a day when the measurement is above the limit and
+    the corrected concentration is at or below it. Grouping follows
+    ``samplingpoint_col``, so a combined table with clock labels in
+    ``Samplingpoint`` keeps the hourly and daily products as separate rows.
+    """
+    work = df.copy()
+    work["Dust_exceedance"] = (work["daily_mean"] > pollutant_threshold) & (
+        work["corrected_pollutant"] <= pollutant_threshold
+    )
+    named = {
+        "Latitude": ("Latitude", "first"),
+        "Longitude": ("Longitude", "first"),
+        "Altitude": ("Altitude", "first"),
+        "Exceedance_days": ("Exceedance", "sum"),
+        "Dust_exceedance_days": ("Dust_exceedance", "sum"),
+        "Average_pollutant": ("daily_mean", "mean"),
+        "Average_pollutant_dust_removed": ("corrected_pollutant", "mean"),
+    }
+    if "eea_resolution" in work.columns and samplingpoint_col != "eea_resolution":
+        named["eea_resolution"] = ("eea_resolution", "first")
+        named["day_definition"] = ("day_definition", "first")
+    table = work.groupby(samplingpoint_col, as_index=False, observed=False).agg(**named)
+    table["NonDust_exceedance"] = table["Exceedance_days"] - table["Dust_exceedance_days"]
+    column_order = [
+        samplingpoint_col,
+        "eea_resolution",
+        "day_definition",
+        "Latitude",
+        "Longitude",
+        "Altitude",
+        "Exceedance_days",
+        "Dust_exceedance_days",
+        "NonDust_exceedance",
+        "Average_pollutant",
+        "Average_pollutant_dust_removed",
+    ]
+    column_order = [col for col in column_order if col in table.columns]
+    return table[column_order]
+
+
 def metadata_path_for(persistent_dir: str, project_dir: str) -> str:
     candidates = [
         os.path.join(persistent_dir, "DataExtract.csv"),
@@ -1248,6 +1424,21 @@ def main() -> pd.DataFrame:
     except Exception:
         print(f"{os.cpu_count()} CPUs detected.")
 
+    flags = resolve_run_flags(
+        download_eea=DOWNLOAD_EEA,
+        download_cams=DOWNLOAD_CAMS,
+        compute_cams_daily=COMPUTE_CAMS_DAILY,
+        load_parquet=False,
+        eea_temporal_flag=EEA_temporal_flag,
+    )
+    for note in flags["notes"]:
+        print(note)
+    if not flags["local_day"]:
+        print(
+            "EEA_temporal_flag is 'hour'. This script still averages CAMS on the "
+            "station local day; the notebook UTC-grid path is the hourly option."
+        )
+
     persistent_dir, _drive_on = resolve_output_dirs(project_dir, USE_GOOGLE_DRIVE, GDRIVE_OUTPUT_DIR)
     extract_dir = download_or_extract_eea(
         project_dir,
@@ -1257,10 +1448,17 @@ def main() -> pd.DataFrame:
         dataset,
         YEAR,
         EEA_temporal_flag,
-        DOWNLOAD_EEA,
+        flags["download_eea"],
     )
-    if DOWNLOAD_CAMS or COMPUTE_CAMS_DAILY:
-        download_and_extract_cams(project_dir, persistent_dir, YEAR, VAR, DOWNLOAD_CAMS)
+    if flags["download_cams"] or flags["compute_cams_daily"]:
+        download_and_extract_cams(
+            project_dir,
+            persistent_dir,
+            YEAR,
+            VAR,
+            download=flags["download_cams"],
+            extract=flags["compute_cams_daily"],
+        )
 
     daily_eea = load_and_filter_eea_daily(extract_dir, EEA_temporal_flag)
     df_processed = filter_daily_by_coverage(
@@ -1287,7 +1485,7 @@ def main() -> pd.DataFrame:
         buffer=CAMS_BUFFER_DEG,
         cache_dir=persistent_dir,
         reuse_cache=True,
-        recompute_daily=bool(COMPUTE_CAMS_DAILY),
+        recompute_daily=bool(flags["compute_cams_daily"]),
         min_hours=MIN_CAMS_HOURS,
         time_col="day",
         year=YEAR,
